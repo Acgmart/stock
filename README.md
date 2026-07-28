@@ -25,12 +25,11 @@ instock/config/stocklist.txt
 600900 长江电力
 ```
 
-东方财富 Cookie 文件可选：
-
-```text
-instock/config/eastmoney_cookie.txt
-```
-
+# 终端开启代理（可选）
+在～/.zshrc文件中添加一行：
+alias daili='export http_proxy=http://127.0.0.1:7897; export https_proxy=http://127.0.0.1:7897; export all_proxy=socks5://127.0.0.1:7897'
+端口号改成自己的软件的端口号，运行新的终端，执行daili命令即可。验证是否开启成功：
+curl -I https://www.google.com
 
 # 安装Docker app
 brew install --cask docker
@@ -38,9 +37,11 @@ brew install --cask docker
 open -a Docker
 点击菜单栏小图标可以唤起Docker面板
 
+# Docker app设置
+General：开启自动启动、关闭启动时打开Dashboard
+
 # 创建本地常驻文件
 mkdir -p "$HOME/instock-data/mariadb/data"
-touch "$HOME/instock-data/eastmoneycookie.txt"
 
 # 创建Docker容器
 ## Create Docker network
@@ -53,22 +54,30 @@ docker run -d --name InStockDbService \
   -e MARIADB_ROOT_PASSWORD=root \
   mariadb:latest
 
+## Create Database
+等待 MariaDB 启动完成后，创建数据库：
+docker exec InStockDbService mariadb -u root -proot -e "CREATE DATABASE IF NOT EXISTS instockdb CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+
+出现联网问题或者代理问题：
 拉取Mariadb失败时需要添加专用的源，用完去掉，Docker Desktop → Settings → Docker Engine：
 "registry-mirrors": [
     "https://docker.m.daocloud.io"
   ]
 
 ## 给本地仓库脚本可执行权限
-ls -l /Users/sekia/Desktop/Git/stock/instock/bin/*.sh
-chmod +x /Users/sekia/Desktop/Git/stock/instock/bin/run_web.sh
+ls -l /Volumes/Game/Git/stock/instock/bin/*.sh
+chmod +x /Volumes/Game/Git/stock/instock/bin/run_web.sh
+终端输入“chmod +x ”然后把文件拖到终端里生成正确的地址。
 
 ## Start InStock
 docker run -dit --name InStock \
   --network InStockService \
   -p 9988:9988 \
-  -v /Users/sekia/Desktop/Git/stock:/data/InStock \
+  -v /Volumes/Game/Git/stock:/data/InStock \
   -e db_host=InStockDbService \
   mayanghua/instock:latest
+其中“/Volumes/Game/Git/stock”指仓库地址，根据实际情况修改。
+“/data/InStock”指容器中的地址。
 
 # 运行项目
 浏览器打开：http://localhost:9988/
@@ -79,23 +88,6 @@ docker logs -f InStockDbService
 
 # 重启docker
 docker restart InStock
-
-# 设东方财富Cookie
-1、获取Cookie
-    打开浏览器，访问东方财富网行情页面：https://quote.eastmoney.com/center/gridlist.html#hs_a_board
-    登录账号（如果有东方财富网账号，建议登录以获取更稳定的Cookie）
-    打开开发者工具（F12）：
-    切换到Network（网络）选项卡
-    刷新页面（按 F5 或点击浏览器刷新按钮）
-    选择任意请求：在网络请求列表中，选择任意一个请求（“get？”开头，建议选择URL包含 push2.eastmoney.com 的请求）
-    查看Cookie：在请求详情中，找到 Request Headers（请求头）部分，复制完整的 Cookie 值
-    保存Cookie：将复制的Cookie值保存下来，稍后使用
-2、设置Cookie
-    编辑eastmoney_cookie.txt文件，替换Cookie。
-3、注意事项
-    Cookie有效期：东方财富网的Cookie通常会在一段时间后过期（一般为几天到几周），如突然无法正常工作，可能是Cookie过期了，需要重新获取并设置
-    定期更新：建议每隔一段时间（如每周）更新一次Cookie，以确保爬取的稳定性
-    多账号轮换：如果有多个东方财富网账号，可以轮换使用不同账号的Cookie，进一步降低被限制的风险
 
 # 看最近日志
 docker logs --tail 200 InStock

@@ -106,6 +106,7 @@ def make_selected_stock_rows(date):
             "high_price": high_price,
             "low_price": low_price,
             "pre_close_price": pre_close,
+            "market_cap": _to_float(fields[44]) / 10000 if len(fields) >= 45 and fields[44] else None,
         })
 
     return rows or None

@@ -4,10 +4,7 @@
 import logging
 import os.path
 import sys
-import datetime
-from zoneinfo import ZoneInfo
 
-import tornado.httpclient
 import tornado.httpserver
 import tornado.ioloop
 import tornado.options
@@ -29,15 +26,6 @@ import instock.web.base as webBase
 __author__ = 'myh '
 __date__ = '2026/5/12 '
 
-_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-_HIGH_DIVIDEND_SNAPSHOT_HOUR = 16
-_HIGH_DIVIDEND_SNAPSHOT_RETRY_SECONDS = 10 * 60
-
-
-def _is_snapshot_day(value):
-    return value.weekday() < 5
-
-
 class Application(tornado.web.Application):
     def __init__(self):
         handlers = [
@@ -46,7 +34,6 @@ class Application(tornado.web.Application):
             (r"/instock/", HomeHandler),
             (r"/instock/high_dividend", highDividendHandler.HighDividendPageHandler),
             (r"/instock/high_dividend/api", highDividendHandler.HighDividendDataHandler),
-            (r"/instock/high_dividend/position", highDividendHandler.HighDividendPositionHandler),
             (r"/instock/high_dividend/fcf", highDividendHandler.HighDividendFcfHandler),
         ]
         settings = dict(  # 配置
@@ -68,61 +55,6 @@ class HomeHandler(webBase.BaseHandler):
         self.render("high_dividend.html")
 
 
-def _schedule_high_dividend_snapshot(port):
-    io_loop = tornado.ioloop.IOLoop.current()
-    snapshot_url = f"http://127.0.0.1:{port}/instock/high_dividend/api"
-
-    def next_snapshot_at(now):
-        target = now.replace(
-            hour=_HIGH_DIVIDEND_SNAPSHOT_HOUR,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        if now >= target:
-            target += datetime.timedelta(days=1)
-        while not _is_snapshot_day(target):
-            target += datetime.timedelta(days=1)
-        return target
-
-    def schedule_next():
-        now = datetime.datetime.now(_SHANGHAI_TZ)
-        target = next_snapshot_at(now)
-        delay_seconds = max(1, (target - now).total_seconds())
-        io_loop.call_later(delay_seconds, lambda: io_loop.spawn_callback(run_snapshot))
-        logging.error(f"高股息列表快照下次生成时间：{target.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    async def run_snapshot():
-        now = datetime.datetime.now(_SHANGHAI_TZ)
-        try:
-            client = tornado.httpclient.AsyncHTTPClient()
-            response = await client.fetch(snapshot_url, request_timeout=300)
-            logging.error(f"高股息列表快照生成完成：HTTP {response.code}")
-            schedule_next()
-        except Exception as error:
-            logging.error(f"高股息列表快照生成失败：{error}")
-            retry_at = now + datetime.timedelta(seconds=_HIGH_DIVIDEND_SNAPSHOT_RETRY_SECONDS)
-            if retry_at.date() == now.date():
-                io_loop.call_later(
-                    _HIGH_DIVIDEND_SNAPSHOT_RETRY_SECONDS,
-                    lambda: io_loop.spawn_callback(run_snapshot),
-                )
-            else:
-                schedule_next()
-
-    now = datetime.datetime.now(_SHANGHAI_TZ)
-    today_target = now.replace(
-        hour=_HIGH_DIVIDEND_SNAPSHOT_HOUR,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-    if now >= today_target and _is_snapshot_day(now):
-        io_loop.call_later(5, lambda: io_loop.spawn_callback(run_snapshot))
-    else:
-        schedule_next()
-
-
 def main():
     # tornado.options.parse_command_line()
     tornado.options.options.logging = None
@@ -130,7 +62,6 @@ def main():
     http_server = tornado.httpserver.HTTPServer(Application())
     port = 9988
     http_server.listen(port)
-    _schedule_high_dividend_snapshot(port)
 
     print(f"服务已启动，web地址 : http://localhost:{port}/")
     logging.error(f"服务已启动，web地址 : http://localhost:{port}/")

@@ -24,12 +24,6 @@
         font-weight: 600;
     }
 
-    .high-dividend-meta {
-        color: #667085;
-        font-size: 13px;
-        margin-top: 4px;
-    }
-
     .high-dividend-actions {
         align-items: center;
         display: flex;
@@ -49,40 +43,6 @@
 
     .filter-control input {
         margin: 0;
-    }
-
-    .snapshot-control {
-        align-items: center;
-        display: inline-flex;
-        gap: 6px;
-        font-size: 14px;
-        line-height: 30px;
-    }
-
-    .snapshot-control input {
-        border: 1px solid #cfd6e4;
-        border-radius: 4px;
-        color: #344054;
-        height: 28px;
-        padding: 2px 6px;
-    }
-
-    .snapshot-control button {
-        background: #fff;
-        border: 1px solid #cfd6e4;
-        border-radius: 4px;
-        color: #344054;
-        height: 28px;
-        line-height: 20px;
-        padding: 3px 8px;
-    }
-
-    .snapshot-control button:hover {
-        background: #f8fbff;
-    }
-
-    .details-column-hidden .details-column {
-        display: none;
     }
 
     .table-shell {
@@ -196,29 +156,6 @@
         font-weight: 600;
     }
 
-    .position-cell-editor {
-        border: 1px solid transparent;
-        line-height: 20px;
-        min-height: 20px;
-        outline: none;
-        padding: 0 3px;
-        width: 100%;
-    }
-
-    .position-cell-editor:focus {
-        background: #fff;
-        border-color: #2563eb;
-        box-shadow: inset 0 0 0 1px #2563eb;
-    }
-
-    .position-cell-editor.is-saved {
-        box-shadow: inset 0 0 0 1px #12b76a;
-    }
-
-    .position-cell-editor.is-error {
-        box-shadow: inset 0 0 0 1px #f04438;
-    }
-
     .manual-number-editor {
         border: 1px solid transparent;
         line-height: 20px;
@@ -247,75 +184,6 @@
         font-weight: 600;
     }
 
-    .details-list {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        min-width: 280px;
-    }
-
-    .detail-line {
-        color: #475467;
-        line-height: 1.45;
-    }
-
-    .detail-main {
-        color: #111827;
-        font-weight: 500;
-    }
-
-    .status-pill {
-        background: #eef4ff;
-        border: 1px solid #c7d7fe;
-        border-radius: 999px;
-        color: #3538cd;
-        display: inline-block;
-        font-size: 12px;
-        line-height: 1.2;
-        margin-left: 6px;
-        padding: 2px 7px;
-        white-space: nowrap;
-    }
-
-    .details-toggle {
-        align-items: center;
-        background: transparent;
-        border: 0;
-        color: #111827;
-        display: inline-flex;
-        gap: 5px;
-        line-height: 20px;
-        padding: 0;
-    }
-
-    .details-toggle:focus,
-    .details-toggle:hover {
-        color: #111827;
-        outline: none;
-        text-decoration: underline;
-    }
-
-    .details-cell {
-        text-align: center;
-        white-space: nowrap;
-    }
-
-    .details-popover {
-        background: #fff;
-        border: 1px solid #b8c1d1;
-        box-shadow: 0 12px 28px rgba(16, 24, 40, 0.18);
-        display: none;
-        max-width: 520px;
-        padding: 10px 12px;
-        position: fixed;
-        text-align: left;
-        z-index: 1050;
-    }
-
-    .details-popover.is-open {
-        display: block;
-    }
-
     .empty-state,
     .error-state {
         color: #667085;
@@ -340,21 +208,10 @@
 
 <div class="high-dividend-page">
     <div class="high-dividend-toolbar">
-        <div>
-            <h1 class="high-dividend-title">高股息列表</h1>
-            <div class="high-dividend-meta">
-                <span id="updatedAt"></span>
-            </div>
-        </div>
-        <div class="high-dividend-actions">
-            <label class="snapshot-control">
-                <span>快照</span>
-                <input id="snapshotDateInput" type="date" list="snapshotDateOptions">
-                <datalist id="snapshotDateOptions"></datalist>
-                <button id="snapshotRealtimeButton" type="button">实时</button>
-            </label>
-            <label class="filter-control" title="勾选后隐藏仓位为0且窄口径FCF为负或扣非低于-10%的股票">
-                <span>过滤</span>
+        <div style="display: flex; align-items: center; gap: 18px;">
+            <h1 class="high-dividend-title" style="margin: 0;">高股息列表</h1>
+            <label class="filter-control" title="勾选后隐藏窄口径FCF为负或扣非低于-10%的股票">
+                <span>过滤扣非与亏损</span>
                 <input id="negativeFcfFilter" type="checkbox" checked>
             </label>
         </div>
@@ -366,7 +223,6 @@
                 <colgroup>
                     <col style="width: 86px;">
                     <col style="width: 132px;">
-                    <col style="width: 132px;">
                     <col style="width: 96px;">
                     <col style="width: 96px;">
                     <col style="width: 96px;">
@@ -378,43 +234,35 @@
                     <col style="width: 112px;">
                     <col style="width: 112px;">
                     <col style="width: 112px;">
-                    <col style="width: 112px;">
-                    <col style="width: 112px;">
-                    <col style="width: 112px;">
-                    <col class="details-column" style="width: 342px;">
+                    <col style="width: 100px;">
                 </colgroup>
                 <thead>
                     <tr>
                         <th>代码<span class="column-resizer"></span></th>
                         <th class="sortable-header" data-sort-key="name">名称<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="sortable-header" data-sort-key="position">仓位<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="deducted_profit_growth">扣非<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell sortable-header" data-sort-key="diluted_eps">收益<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
+                        <th class="number-cell">收益<span class="column-resizer"></span></th>
                         <th class="number-cell">派息<span class="column-resizer"></span></th>
                         <th class="number-cell">股价<span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="dividend_yield">股息率<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell">股息增长年<span class="column-resizer"></span></th>
+                        <th class="number-cell">息增年<span class="column-resizer"></span></th>
                         <th class="number-cell">窄口径FCF<span class="column-resizer"></span></th>
                         <th class="number-cell">FCF/股息<span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="fcf_price">FCF/股价<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="ma120_position">日MA120<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell sortable-header" data-sort-key="value_bet_rate">值博率<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell sortable-header" data-sort-key="value_bet_rate_change_1">值博1<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell sortable-header" data-sort-key="value_bet_rate_change_7">值博7<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell sortable-header" data-sort-key="value_bet_rate_change_21">值博21<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="details-column">派息明细<span class="column-resizer"></span></th>
+                        <th class="sortable-header" data-sort-key="industry_name">行业<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
+                        <th class="number-cell sortable-header" data-sort-key="market_cap">市值<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                     </tr>
                 </thead>
                 <tbody id="dividendRows">
                     <tr>
-                        <td class="empty-state" colspan="18">加载中...</td>
+                        <td class="empty-state" colspan="14">加载中...</td>
                     </tr>
                 </tbody>
             </table>
         </div>
     </div>
 </div>
-<div id="detailsPopover" class="details-popover"></div>
 
 <script type="text/javascript">
     let highDividendRows = [];
@@ -423,8 +271,6 @@
         direction: "asc"
     };
     const FILTER_STORAGE_KEY = "highDividendNegativeFcfFilterEnabled";
-    let isSnapshotMode = false;
-
     function formatNumber(value, digits) {
         if (value === null || value === undefined || Number.isNaN(Number(value))) {
             return "--";
@@ -454,23 +300,6 @@
         return (number > 0 ? "+" : "") + number.toFixed(2) + "%";
     }
 
-    function formatPosition(value) {
-        const text = String(value || "").trim();
-        if (!text) {
-            return "";
-        }
-        if (text.endsWith("%")) {
-            return text;
-        }
-        return text + "%";
-    }
-
-    function normalizePosition(value) {
-        const text = String(value || "").trim().replace(/%/g, "");
-        const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
-        return match ? match[0] : "";
-    }
-
     function formatOptionalNumber(value, digits) {
         if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) {
             return "";
@@ -493,31 +322,6 @@
             .replace(/'/g, "&#039;");
     }
 
-    function renderDetails(details) {
-        if (!details || details.length === 0) {
-            return '<span class="text-muted">无派息记录</span>';
-        }
-
-        return '<div class="details-list">' + details.map(function(item) {
-            const dateText = item.ex_dividend_date ? '除息 ' + item.ex_dividend_date : '未除息';
-            return [
-                '<div class="detail-line">',
-                '<span class="detail-main">',
-                escapeHtml(item.report_date),
-                '：',
-                escapeHtml(item.plan || ('10派' + formatNumber(item.cash_per_10, 2) + '元')),
-                '</span>',
-                '<span class="status-pill">',
-                escapeHtml(item.progress || "待公告"),
-                '</span>',
-                '<br>',
-                escapeHtml(dateText),
-                item.notice_date ? '，公告 ' + escapeHtml(item.notice_date) : '',
-                '</div>'
-            ].join('');
-        }).join('') + '</div>';
-    }
-
     function compareRows(left, right) {
         const leftPinned = Boolean(left && (left.dividend_changed || left.finance_report_changed));
         const rightPinned = Boolean(right && (right.dividend_changed || right.finance_report_changed));
@@ -529,14 +333,11 @@
         if (sortState.key === "name") {
             return direction * String(left.name || "").localeCompare(String(right.name || ""), "zh-Hans-CN");
         }
-        if (sortState.key === "position") {
-            return direction * (parsePositionValue(left.position) - parsePositionValue(right.position));
+        if (sortState.key === "industry_name") {
+            return direction * String(left.industry_name || "").localeCompare(String(right.industry_name || ""), "zh-Hans-CN");
         }
         if (sortState.key === "deducted_profit_growth") {
             return direction * (parseNullableNumber(left.deducted_profit_growth) - parseNullableNumber(right.deducted_profit_growth));
-        }
-        if (sortState.key === "diluted_eps") {
-            return direction * (parseNullableNumber(left.diluted_eps) - parseNullableNumber(right.diluted_eps));
         }
         if (sortState.key === "fcf_price") {
             return direction * (parseNullableNumber(left.fcf_price) - parseNullableNumber(right.fcf_price));
@@ -544,17 +345,8 @@
         if (sortState.key === "ma120_position") {
             return direction * (parseNullableNumber(left.ma120_position) - parseNullableNumber(right.ma120_position));
         }
-        if (sortState.key === "value_bet_rate") {
-            return direction * (parseNullableNumber(left.value_bet_rate) - parseNullableNumber(right.value_bet_rate));
-        }
-        if (sortState.key === "value_bet_rate_change_1") {
-            return direction * (parseNullableNumber(left.value_bet_rate_change_1) - parseNullableNumber(right.value_bet_rate_change_1));
-        }
-        if (sortState.key === "value_bet_rate_change_7") {
-            return direction * (parseNullableNumber(left.value_bet_rate_change_7) - parseNullableNumber(right.value_bet_rate_change_7));
-        }
-        if (sortState.key === "value_bet_rate_change_21") {
-            return direction * (parseNullableNumber(left.value_bet_rate_change_21) - parseNullableNumber(right.value_bet_rate_change_21));
+        if (sortState.key === "market_cap") {
+            return direction * (parseNullableNumber(left.market_cap) - parseNullableNumber(right.market_cap));
         }
 
         const leftValue = left.dividend_yield === null || left.dividend_yield === undefined ? -Infinity : Number(left.dividend_yield);
@@ -569,23 +361,12 @@
         return Number(value);
     }
 
-    function parsePositionValue(value) {
-        if (value === null || value === undefined || String(value).trim() === "") {
-            return 0;
-        }
-        const match = String(value).replace(/,/g, "").match(/-?\d+(\.\d+)?/);
-        return match ? Number(match[0]) : 0;
-    }
-
     function sortedRows(rows) {
         return (rows || []).slice().sort(compareRows);
     }
 
     function shouldHideByFilter(row) {
         if (!document.getElementById("negativeFcfFilter").checked) {
-            return false;
-        }
-        if (parsePositionValue(row.position) > 0) {
             return false;
         }
 
@@ -631,13 +412,8 @@
         window.localStorage.setItem(FILTER_STORAGE_KEY, String(isFilterEnabled()));
     }
 
-    function updateDetailsColumnVisibility() {
-        $("#highDividendTable").toggleClass("details-column-hidden", isFilterEnabled());
-        hideDetailsPopover();
-    }
-
     function tableColumnCount() {
-        return isFilterEnabled() ? 17 : 18;
+        return 14;
     }
 
     function updateSortIcons() {
@@ -662,18 +438,6 @@
         }
 
         tbody.innerHTML = displayRows.map(function(row, index) {
-            const detailCount = row.details ? row.details.length : 0;
-            const detailsCell = isFilterEnabled() ? '' : [
-                '<td class="details-cell details-column">',
-                '<button type="button" class="details-toggle" data-details-index="',
-                index,
-                '"',
-                detailCount === 0 ? ' disabled' : '',
-                '><i class="fa fa-info-circle"></i>',
-                detailCount > 0 ? '查看 ' + detailCount + ' 条' : '无明细',
-                '</button>',
-                '</td>'
-            ].join('');
             return [
                 '<tr>',
                 '<td><a href="https://quote.eastmoney.com/' + (row.code.charAt(0) === '6' ? 'sh' : 'sz') + row.code + '.html" target="_blank" rel="noopener noreferrer">',
@@ -683,17 +447,6 @@
                 (row.dividend_changed || row.finance_report_changed) ? 'changed-name' : '',
                 '">',
                 escapeHtml(row.name),
-                '</td>',
-                '<td>',
-                '<div class="position-cell-editor" contenteditable="',
-                isSnapshotMode ? 'false' : 'true',
-                '" data-code="',
-                escapeHtml(row.code),
-                '" data-last-saved-value="',
-                escapeHtml(row.position || ""),
-                '">',
-                escapeHtml(formatPosition(row.position)),
-                '</div>',
                 '</td>',
                 '<td class="number-cell',
                 Number(row.deducted_profit_growth) < -10 ? ' warning-blue-cell' : '',
@@ -711,9 +464,7 @@
                 '<td class="number-cell">',
                 formatNumber(row.current_price, 2),
                 '</td>',
-                '<td class="number-cell',
-                parsePositionValue(row.position) > 0 ? ' yield-cell' : '',
-                '">',
+                '<td class="number-cell yield-cell">',
                 formatPercent(row.dividend_yield),
                 '</td>',
                 '<td class="number-cell">',
@@ -724,9 +475,7 @@
                 '">',
                 '<div class="manual-number-editor',
                 row.manual_narrow_fcf_stale ? ' is-stale' : '',
-                '" contenteditable="',
-                isSnapshotMode ? 'false' : 'true',
-                '" data-field="narrow_fcf" data-code="',
+                '" contenteditable="true" data-field="narrow_fcf" data-code="',
                 escapeHtml(row.code),
                 '" data-last-saved-value="',
                 escapeHtml(formatOptionalNumber(row.narrow_fcf, 2)),
@@ -745,69 +494,24 @@
                 '">',
                 formatBlankPercent(row.ma120_position),
                 '</td>',
-                '<td class="number-cell',
-                parsePositionValue(row.position) > 0 ? ' yield-cell' : '',
-                '">',
-                formatBlankPercent(row.value_bet_rate),
+                '<td>',
+                escapeHtml(row.industry_name || ""),
                 '</td>',
-                '<td class="number-cell" title="',
-                escapeHtml(row.previous_value_bet_rate_date_1 ? '基准 ' + row.previous_value_bet_rate_date_1 + '：' + formatBlankPercent(row.previous_value_bet_rate_1) : ''),
-                '">',
-                formatSignedPercent(row.value_bet_rate_change_1),
+                '<td class="number-cell">',
+                formatOptionalNumber(row.market_cap, 2),
                 '</td>',
-                '<td class="number-cell" title="',
-                escapeHtml(row.previous_value_bet_rate_date_7 ? '基准 ' + row.previous_value_bet_rate_date_7 + '：' + formatBlankPercent(row.previous_value_bet_rate_7) : ''),
-                '">',
-                formatSignedPercent(row.value_bet_rate_change_7),
-                '</td>',
-                '<td class="number-cell" title="',
-                escapeHtml(row.previous_value_bet_rate_date_21 ? '基准 ' + row.previous_value_bet_rate_date_21 + '：' + formatBlankPercent(row.previous_value_bet_rate_21) : ''),
-                '">',
-                formatSignedPercent(row.value_bet_rate_change_21),
-                '</td>',
-                detailsCell,
                 '</tr>'
             ].join('');
         }).join('');
         updateSortIcons();
     }
 
-    function renderSummary(payload) {
-        const prefix = payload.is_snapshot && payload.snapshot_date ? "快照 " + payload.snapshot_date + " / " : "更新 ";
-        document.getElementById("updatedAt").textContent = payload.generated_at ? prefix + payload.generated_at : "";
-    }
-
-    function getSelectedSnapshotDate() {
-        return $("#snapshotDateInput").val();
-    }
-
-    function updateSnapshotDateOptions(dates) {
-        const normalizedDates = dates || [];
-        $("#snapshotDateOptions").html(normalizedDates.map(function(date) {
-            return '<option value="' + escapeHtml(date) + '"></option>';
-        }).join(''));
-        if (normalizedDates.length > 0) {
-            $("#snapshotDateInput").attr({
-                max: normalizedDates[0],
-                min: normalizedDates[normalizedDates.length - 1]
-            });
-        }
-    }
-
     function loadHighDividendList() {
         const tbody = document.getElementById("dividendRows");
-        const snapshotDate = getSelectedSnapshotDate();
-        const requestUrl = snapshotDate
-            ? "/instock/high_dividend/api?snapshot_date=" + encodeURIComponent(snapshotDate)
-            : "/instock/high_dividend/api";
-
         tbody.innerHTML = '<tr><td class="empty-state" colspan="' + tableColumnCount() + '">加载中...</td></tr>';
 
-        $.getJSON(requestUrl)
+        $.getJSON("/instock/high_dividend/api")
             .done(function(payload) {
-                isSnapshotMode = !!payload.is_snapshot;
-                updateSnapshotDateOptions(payload.snapshot_dates);
-                renderSummary(payload);
                 highDividendRows = payload.data || [];
                 renderRows(highDividendRows);
                 if (payload.errors && payload.errors.length > 0) {
@@ -818,7 +522,6 @@
                 let message = xhr.statusText || xhr.status;
                 if (xhr.responseJSON && xhr.responseJSON.message) {
                     message = xhr.responseJSON.message;
-                    updateSnapshotDateOptions(xhr.responseJSON.snapshot_dates);
                 }
                 tbody.innerHTML = '<tr><td class="error-state" colspan="' + tableColumnCount() + '">数据读取失败：' + escapeHtml(message) + '</td></tr>';
             });
@@ -827,39 +530,10 @@
     function startAfterCloseDividendRefresh() {
         window.setInterval(function() {
             const hour = new Date().getHours();
-            if (!getSelectedSnapshotDate() && hour >= 16 && hour <= 23) {
+            if (hour >= 16 && hour <= 23) {
                 loadHighDividendList();
             }
         }, 60 * 60 * 1000);
-    }
-
-    function savePosition(input) {
-        const target = $(input);
-        const code = target.attr("data-code");
-        const position = normalizePosition(target.text());
-        target.text(formatPosition(position));
-        target.removeClass("is-saved is-error");
-        $.post("/instock/high_dividend/position", {
-            code: code,
-            position: position
-        }).done(function() {
-            const row = highDividendRows.find(function(item) {
-                return String(item.code) === code;
-            });
-            if (row) {
-                row.position = position;
-                if (shouldHideByFilter(row)) {
-                    renderRows(highDividendRows);
-                    return;
-                }
-            }
-            target.addClass("is-saved");
-            window.setTimeout(function() {
-                target.removeClass("is-saved");
-            }, 1200);
-        }).fail(function() {
-            target.addClass("is-error");
-        });
     }
 
     function saveNarrowFcf(input) {
@@ -906,24 +580,6 @@
             target.text(previousSavedValue);
             target.addClass("is-error");
         });
-    }
-
-    function showDetailsPopover(button) {
-        const target = $(button);
-        const index = Number(target.data("details-index"));
-        const row = displayedRows(highDividendRows)[index];
-        const popover = $("#detailsPopover");
-        popover.html(renderDetails(row ? row.details : []));
-        const rect = button.getBoundingClientRect();
-        popover.css({
-            left: Math.min(rect.left, window.innerWidth - 540) + "px",
-            top: Math.min(rect.bottom + 6, window.innerHeight - 240) + "px"
-        });
-        popover.addClass("is-open");
-    }
-
-    function hideDetailsPopover() {
-        $("#detailsPopover").removeClass("is-open");
     }
 
     function loadColumnWidths() {
@@ -984,17 +640,8 @@
         loadFilterState();
         $("#negativeFcfFilter").on("change", function() {
             saveFilterState();
-            updateDetailsColumnVisibility();
             renderRows(highDividendRows);
         });
-        $("#snapshotDateInput").on("change", function() {
-            loadHighDividendList();
-        });
-        $("#snapshotRealtimeButton").on("click", function() {
-            $("#snapshotDateInput").val("");
-            loadHighDividendList();
-        });
-        updateDetailsColumnVisibility();
         $(".sortable-header").on("click", function() {
             const key = $(this).data("sort-key");
             if (sortState.key === key) {
@@ -1005,43 +652,7 @@
             }
             renderRows(highDividendRows);
         });
-        $("#dividendRows").on("mouseenter focus click", ".details-toggle", function(event) {
-            event.stopPropagation();
-            showDetailsPopover(this);
-        });
-        $("#dividendRows").on("mouseleave", ".details-toggle", function() {
-            window.setTimeout(function() {
-                if (!$("#detailsPopover:hover").length) {
-                    hideDetailsPopover();
-                }
-            }, 120);
-        });
-        $("#detailsPopover").on("mouseleave", hideDetailsPopover);
-        $(document).on("click", function() {
-            hideDetailsPopover();
-        });
-        $("#dividendRows").on("blur", ".position-cell-editor", function() {
-            if (isSnapshotMode) {
-                return;
-            }
-            const value = $(this).text().trim();
-            const position = normalizePosition(value);
-            if (this.dataset.lastSavedValue === position) {
-                return;
-            }
-            this.dataset.lastSavedValue = position;
-            savePosition(this);
-        });
-        $("#dividendRows").on("keydown", ".position-cell-editor", function(event) {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                this.blur();
-            }
-        });
         $("#dividendRows").on("blur", ".manual-number-editor", function() {
-            if (isSnapshotMode) {
-                return;
-            }
             const value = formatOptionalNumber(normalizeNumber($(this).text()), 2);
             if (this.dataset.lastSavedValue === value) {
                 $(this).text(value);

@@ -1,29 +1,19 @@
 # 高股息列表
-
 一个精简版 InStock Web 应用，仅保留高股息列表相关功能。
 项目仅考虑沪深主板股票。
+原仓库地址：https://github.com/myhhub/stock
 
 ## 功能
-
 - 读取 `instock/config/stocklist.txt` 中的股票代码。
 - 拉取并缓存行情价格。
-- 拉取并缓存东方财富派息明细。
-- 支持手动维护仓位与窄口径 FCF。
+- 支持手动维护窄口径 FCF。
 - 前端展示股息率、股息增长年、FCF/股息、FCF/股价和派息明细。
 
-## 配置
-
-股票池文件：
-
-```text
+## 配置股票列表
 instock/config/stocklist.txt
-```
-
 每行一个股票代码，可带名称：
-
-```text
 600900 长江电力
-```
+已经配置了300多只股息率大于3%的股票，每年。
 
 # 终端开启代理（可选）
 在～/.zshrc文件中添加一行：
@@ -54,15 +44,15 @@ docker run -d --name InStockDbService \
   -e MARIADB_ROOT_PASSWORD=root \
   mariadb:latest
 
-## Create Database
-等待 MariaDB 启动完成后，创建数据库：
-docker exec InStockDbService mariadb -u root -proot -e "CREATE DATABASE IF NOT EXISTS instockdb CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
-
-出现联网问题或者代理问题：
+当出现联网问题时可选：
 拉取Mariadb失败时需要添加专用的源，用完去掉，Docker Desktop → Settings → Docker Engine：
 "registry-mirrors": [
     "https://docker.m.daocloud.io"
   ]
+
+## Create Database
+等待 MariaDB 启动完成后，创建数据库：
+docker exec InStockDbService mariadb -u root -proot -e "CREATE DATABASE IF NOT EXISTS instockdb CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
 
 ## 给本地仓库脚本可执行权限
 ls -l /Volumes/Game/Git/stock/instock/bin/*.sh

@@ -35,8 +35,6 @@ _FINANCE_REPORT_CACHE_TABLE = "cn_high_dividend_finance_report_cache"
 _CASHFLOW_CACHE_TABLE = "cn_high_dividend_cashflow_cache"
 _POSITION_CACHE_TABLE = "cn_high_dividend_position_cache"
 _MA120_CACHE_TABLE = "cn_high_dividend_ma120_cache"
-_VALUE_BET_RATE_SNAPSHOT_TABLE = "cn_high_dividend_value_bet_rate_snapshot"
-_HIGH_DIVIDEND_LIST_SNAPSHOT_TABLE = "cn_high_dividend_list_snapshot"
 _FINANCE_REPORT_REFRESH_LOCK = threading.Lock()
 _CASHFLOW_REFRESH_LOCK = threading.Lock()
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -46,8 +44,6 @@ _DIVIDEND_AFTER_CLOSE_REFRESH_START_HOUR = 16
 _DIVIDEND_AFTER_CLOSE_REFRESH_END_HOUR = 23
 _REPORT_AFTER_CLOSE_REFRESH_INTERVAL_HOURS = 4
 _CASHFLOW_OFFSEASON_REFRESH_DAYS = 7
-_HIGH_DIVIDEND_SNAPSHOT_HOUR = 16
-_HIGH_DIVIDEND_SNAPSHOT_RETENTION_DAYS = 400
 _FINANCE_REPORT_REFRESH_RUNNING = False
 _CASHFLOW_REFRESH_RUNNING = False
 
@@ -61,27 +57,6 @@ def _to_float(value):
         return float(value)
     except Exception:
         return None
-
-
-def _calculate_value_bet_rate(dividend_yield, fcf_dividend, fcf_price, ma120_position):
-    if any(value is None for value in (dividend_yield, fcf_dividend, fcf_price, ma120_position)):
-        return None
-
-    if dividend_yield < 3:
-        dividend_score = (dividend_yield - 4) * 1.5
-    else:
-        dividend_score = min(dividend_yield, 6) - 4
-
-    if fcf_dividend >= 1:
-        fcf_dividend_score = 0
-    elif fcf_dividend >= 0:
-        fcf_dividend_score = (fcf_dividend - 1) * 6
-    else:
-        fcf_dividend_score = -10
-
-    fcf_price_score = fcf_price - 4
-    ma120_score = max(-10, min(10, -ma120_position * 0.25))
-    return dividend_score + fcf_dividend_score + fcf_price_score + ma120_score
 
 
 def _now():
@@ -132,6 +107,7 @@ def _ensure_cache_tables(db):
                 INDEX `idx_fetched_at` (`fetched_at`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
+        db.execute(f"ALTER TABLE `{_PRICE_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `market_cap` decimal(16,4) DEFAULT NULL")
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_DIVIDEND_HISTORY_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
@@ -180,15 +156,12 @@ def _ensure_cache_tables(db):
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_POSITION_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
-                `position_text` varchar(100) DEFAULT NULL,
                 `narrow_fcf` decimal(12,4) DEFAULT NULL,
                 `narrow_fcf_report_date` date DEFAULT NULL,
                 `updated_at` datetime NOT NULL,
                 PRIMARY KEY (`code`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
-        db.execute(f"ALTER TABLE `{_POSITION_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `narrow_fcf` decimal(12,4) DEFAULT NULL")
-        db.execute(f"ALTER TABLE `{_POSITION_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `narrow_fcf_report_date` date DEFAULT NULL")
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_MA120_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
@@ -199,27 +172,6 @@ def _ensure_cache_tables(db):
                 `fetched_at` datetime NOT NULL,
                 PRIMARY KEY (`code`),
                 INDEX `idx_fetched_at` (`fetched_at`)
-            ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
-        """)
-        db.execute(f"""
-            CREATE TABLE IF NOT EXISTS `{_VALUE_BET_RATE_SNAPSHOT_TABLE}` (
-                `code` varchar(6) NOT NULL,
-                `snapshot_date` date NOT NULL,
-                `value_bet_rate` decimal(12,4) DEFAULT NULL,
-                `updated_at` datetime NOT NULL,
-                PRIMARY KEY (`code`, `snapshot_date`),
-                INDEX `idx_snapshot_date` (`snapshot_date`)
-            ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
-        """)
-        db.execute(f"""
-            CREATE TABLE IF NOT EXISTS `{_HIGH_DIVIDEND_LIST_SNAPSHOT_TABLE}` (
-                `snapshot_date` date NOT NULL,
-                `stock_count` int DEFAULT NULL,
-                `payload_json` longtext NOT NULL,
-                `generated_at` datetime NOT NULL,
-                `created_at` datetime NOT NULL,
-                PRIMARY KEY (`snapshot_date`),
-                INDEX `idx_generated_at` (`generated_at`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
         _CACHE_TABLE_READY = True
@@ -260,7 +212,7 @@ def _read_price_cache(db, stock_codes):
         return []
     placeholders = ",".join(["%s"] * len(stock_codes))
     return db.query(f"""
-        SELECT `code`, `name`, `price_date`, `current_price`, `fetched_at`, `market_phase`
+        SELECT `code`, `name`, `price_date`, `current_price`, `market_cap`, `fetched_at`, `market_phase`
         FROM `{_PRICE_CACHE_TABLE}`
         WHERE `code` IN ({placeholders})
     """, *stock_codes)
@@ -274,12 +226,13 @@ def _write_price_cache(db, price_data, now):
             current_price = _to_float(row.get("pre_close_price"))
         db.execute(f"""
             INSERT INTO `{_PRICE_CACHE_TABLE}`
-                (`code`, `name`, `price_date`, `current_price`, `fetched_at`, `market_phase`)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (`code`, `name`, `price_date`, `current_price`, `market_cap`, `fetched_at`, `market_phase`)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 `name` = VALUES(`name`),
                 `price_date` = VALUES(`price_date`),
                 `current_price` = VALUES(`current_price`),
+                `market_cap` = VALUES(`market_cap`),
                 `fetched_at` = VALUES(`fetched_at`),
                 `market_phase` = VALUES(`market_phase`)
         """,
@@ -287,6 +240,7 @@ def _write_price_cache(db, price_data, now):
                    row.get("name"),
                    row.get("date"),
                    current_price,
+                   _to_float(row.get("market_cap")),
                    now.strftime("%Y-%m-%d %H:%M:%S"),
                    phase)
 
@@ -311,13 +265,12 @@ def _read_manual_cache(db, stock_codes):
         return {}
     placeholders = ",".join(["%s"] * len(stock_codes))
     rows = db.query(f"""
-        SELECT `code`, `position_text`, `narrow_fcf`, `narrow_fcf_report_date`
+        SELECT `code`, `narrow_fcf`, `narrow_fcf_report_date`
         FROM `{_POSITION_CACHE_TABLE}`
         WHERE `code` IN ({placeholders})
     """, *stock_codes)
     return {
         row["code"]: {
-            "position": row.get("position_text") or "",
             "narrow_fcf": _to_float(row.get("narrow_fcf")),
             "narrow_fcf_report_date": _date_text(row.get("narrow_fcf_report_date")),
         }
@@ -339,13 +292,14 @@ def _read_ma120_cache(db, stock_codes):
 
 def _is_ma120_cache_stale(cache_row, now):
     phase = _market_phase(now)
-    if phase == "intraday":
-        return False
     if cache_row is None:
         return True
     fetched_at = cache_row.get("fetched_at")
     if not fetched_at:
         return True
+    if phase == "intraday" or phase == "before_open":
+        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
+        return fetched_at < close_time - datetime.timedelta(days=1)
     if phase == "after_close":
         close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
         return fetched_at < close_time
@@ -429,19 +383,6 @@ def _schedule_ma120_refresh(stock_codes):
     thread.start()
 
 
-def _write_position_cache(db, code, position_text):
-    db.execute(f"""
-        INSERT INTO `{_POSITION_CACHE_TABLE}` (`code`, `position_text`, `updated_at`)
-        VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            `position_text` = VALUES(`position_text`),
-            `updated_at` = VALUES(`updated_at`)
-    """,
-               code,
-               position_text,
-               _now().strftime("%Y-%m-%d %H:%M:%S"))
-
-
 def _write_fcf_cache(db, code, narrow_fcf, report_date):
     db.execute(f"""
         INSERT INTO `{_POSITION_CACHE_TABLE}`
@@ -456,153 +397,6 @@ def _write_fcf_cache(db, code, narrow_fcf, report_date):
                narrow_fcf,
                report_date if narrow_fcf is not None else None,
                _now().strftime("%Y-%m-%d %H:%M:%S"))
-
-
-def _read_value_bet_rate_snapshots(db, stock_codes, today, periods=(1, 7, 21)):
-    if not stock_codes:
-        return {}
-    placeholders = ",".join(["%s"] * len(stock_codes))
-    snapshots = {}
-    for period in periods:
-        target_date = today - datetime.timedelta(days=period)
-        rows = db.query(f"""
-            SELECT `code`, `snapshot_date`, `value_bet_rate`
-            FROM `{_VALUE_BET_RATE_SNAPSHOT_TABLE}`
-            WHERE `code` IN ({placeholders})
-              AND `snapshot_date` <= %s
-            ORDER BY `code`, `snapshot_date` DESC
-        """, *(list(stock_codes) + [target_date.strftime("%Y-%m-%d")]))
-        for row in rows:
-            code = row.get("code")
-            code_snapshots = snapshots.setdefault(code, {})
-            if period not in code_snapshots:
-                code_snapshots[period] = {
-                    "snapshot_date": _date_text(row.get("snapshot_date")),
-                    "value_bet_rate": _to_float(row.get("value_bet_rate")),
-                }
-    return snapshots
-
-
-def _write_value_bet_rate_snapshots(db, rows, now):
-    if now.weekday() >= 5 or _market_phase(now) != "after_close":
-        return
-    snapshot_date = now.strftime("%Y-%m-%d")
-    updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
-    for row in rows:
-        value_bet_rate = _to_float(row.get("value_bet_rate"))
-        if value_bet_rate is None:
-            continue
-        db.execute(f"""
-            INSERT INTO `{_VALUE_BET_RATE_SNAPSHOT_TABLE}`
-                (`code`, `snapshot_date`, `value_bet_rate`, `updated_at`)
-            VALUES (%s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                `value_bet_rate` = VALUES(`value_bet_rate`),
-                `updated_at` = VALUES(`updated_at`)
-        """,
-                   row.get("code"),
-                   snapshot_date,
-                   value_bet_rate,
-                   updated_at)
-
-
-def _read_high_dividend_snapshot_dates(db):
-    rows = db.query(f"""
-        SELECT `snapshot_date`
-        FROM `{_HIGH_DIVIDEND_LIST_SNAPSHOT_TABLE}`
-        ORDER BY `snapshot_date` DESC
-        LIMIT %s
-    """, _HIGH_DIVIDEND_SNAPSHOT_RETENTION_DAYS)
-    return [_date_text(row.get("snapshot_date")) for row in rows]
-
-
-def _read_high_dividend_list_snapshot(db, snapshot_date):
-    row = db.get(f"""
-        SELECT `snapshot_date`, `payload_json`, `generated_at`
-        FROM `{_HIGH_DIVIDEND_LIST_SNAPSHOT_TABLE}`
-        WHERE `snapshot_date` = %s
-    """, snapshot_date)
-    if row is None:
-        return None
-    try:
-        payload = json.loads(row["payload_json"])
-    except Exception:
-        return None
-    payload["is_snapshot"] = True
-    payload["snapshot_date"] = _date_text(row.get("snapshot_date"))
-    payload["generated_at"] = str(row.get("generated_at"))[:19]
-    return payload
-
-
-def _write_high_dividend_list_snapshot(db, payload, now):
-    if now.time() < datetime.time(_HIGH_DIVIDEND_SNAPSHOT_HOUR, 0):
-        return
-
-    snapshot_date = _resolve_high_dividend_snapshot_date(payload, now)
-    if not snapshot_date:
-        return
-    if snapshot_date != now.strftime("%Y-%m-%d") and _high_dividend_snapshot_exists(db, snapshot_date):
-        return
-
-    generated_at = now.strftime("%Y-%m-%d %H:%M:%S")
-    snapshot_payload = dict(payload)
-    snapshot_payload.pop("snapshot_dates", None)
-    snapshot_payload["is_snapshot"] = True
-    snapshot_payload["snapshot_date"] = snapshot_date
-    snapshot_payload["generated_at"] = generated_at
-
-    db.execute(f"""
-        INSERT INTO `{_HIGH_DIVIDEND_LIST_SNAPSHOT_TABLE}`
-            (`snapshot_date`, `stock_count`, `payload_json`, `generated_at`, `created_at`)
-        VALUES (%s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            `stock_count` = VALUES(`stock_count`),
-            `payload_json` = VALUES(`payload_json`),
-            `generated_at` = VALUES(`generated_at`)
-    """,
-               snapshot_date,
-               payload.get("stock_count"),
-               json.dumps(snapshot_payload, ensure_ascii=False, default=_json_default),
-               generated_at,
-               generated_at)
-
-    cutoff_date = datetime.datetime.strptime(snapshot_date, "%Y-%m-%d").date() - datetime.timedelta(
-        days=_HIGH_DIVIDEND_SNAPSHOT_RETENTION_DAYS - 1
-    )
-    db.execute(f"""
-        DELETE FROM `{_HIGH_DIVIDEND_LIST_SNAPSHOT_TABLE}`
-        WHERE `snapshot_date` < %s
-    """, cutoff_date.strftime("%Y-%m-%d"))
-
-
-def _resolve_high_dividend_snapshot_date(payload, now):
-    price_dates = []
-    for row in payload.get("data", []):
-        price_date = _date_text(row.get("price_date"))
-        if not price_date:
-            continue
-        try:
-            parsed_date = datetime.datetime.strptime(price_date, "%Y-%m-%d").date()
-        except Exception:
-            continue
-        if parsed_date <= now.date():
-            price_dates.append(parsed_date)
-    if price_dates:
-        return max(price_dates).strftime("%Y-%m-%d")
-
-    fallback_date = now.date()
-    while fallback_date.weekday() >= 5:
-        fallback_date -= datetime.timedelta(days=1)
-    return fallback_date.strftime("%Y-%m-%d")
-
-
-def _high_dividend_snapshot_exists(db, snapshot_date):
-    row = db.get(f"""
-        SELECT `snapshot_date`
-        FROM `{_HIGH_DIVIDEND_LIST_SNAPSHOT_TABLE}`
-        WHERE `snapshot_date` = %s
-    """, snapshot_date)
-    return row is not None
 
 
 def _fetch_dividend_history(code):
@@ -987,6 +781,7 @@ def _get_cached_latest_finance_report(db, code):
         "notice_date": _date_text(row.get("NOTICE_DATE")),
         "deducted_profit": _to_float(row.get("KCFJCXSYJLR")),
         "report_changed": report_changed,
+        "industry_name": row.get("INDUSTRY_NAME") or "",
         **annual_eps,
     }, is_stale
 
@@ -1308,25 +1103,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
         _ensure_cache_tables(self.db)
         self.set_header("Content-Type", "application/json;charset=UTF-8")
         now = _now()
-        snapshot_date = self.get_argument("snapshot_date", default="", strip=True)
-        if snapshot_date:
-            snapshot_date = _date_text(snapshot_date)
-            snapshot_payload = _read_high_dividend_list_snapshot(self.db, snapshot_date)
-            if snapshot_payload is None:
-                self.set_status(404)
-                self.write(json.dumps({
-                    "success": False,
-                    "message": "未找到该日期快照",
-                    "snapshot_date": snapshot_date,
-                    "snapshot_dates": _read_high_dividend_snapshot_dates(self.db),
-                    "data": [],
-                    "errors": [],
-                }, ensure_ascii=False))
-                return
-            snapshot_payload["snapshot_dates"] = _read_high_dividend_snapshot_dates(self.db)
-            self.write(json.dumps(snapshot_payload, ensure_ascii=False, default=_json_default))
-            return
-
         stock_codes = [code for code in stocklist.get_stock_codes() if stocklist.is_a_stock_code(code)]
         rows = []
         errors = []
@@ -1334,7 +1110,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
         manual_by_code = _read_manual_cache(self.db, stock_codes)
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
-        value_bet_rate_snapshots = _read_value_bet_rate_snapshots(self.db, stock_codes, now.date())
         stale_ma120_codes = [
             code for code in stock_codes
             if _is_ma120_cache_stale(ma120_by_code.get(code), now)
@@ -1401,26 +1176,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     fcf_dividend = narrow_fcf / dividend_per_share
                 if current_price and current_price > 0:
                     fcf_price = narrow_fcf / current_price * 100
-            value_bet_rate = _calculate_value_bet_rate(
-                dividend_yield,
-                fcf_dividend,
-                fcf_price,
-                ma120_position
-            )
-            value_bet_rate_snapshot_rows = value_bet_rate_snapshots.get(code, {})
-            value_bet_rate_changes = {}
-            for period in (1, 7, 21):
-                snapshot_row = value_bet_rate_snapshot_rows.get(period, {})
-                previous_value_bet_rate = snapshot_row.get("value_bet_rate")
-                value_bet_rate_change = None
-                if value_bet_rate is not None and previous_value_bet_rate is not None:
-                    value_bet_rate_change = value_bet_rate - previous_value_bet_rate
-                value_bet_rate_changes[period] = {
-                    "previous_value_bet_rate": previous_value_bet_rate,
-                    "previous_value_bet_rate_date": snapshot_row.get("snapshot_date", ""),
-                    "value_bet_rate_change": value_bet_rate_change,
-                }
-
             name = "" if price_row is None else price_row.get("name")
             if not name and details:
                 name = details[0].get("name", "")
@@ -1428,7 +1183,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
             rows.append({
                 "code": code,
                 "name": name,
-                "position": manual_row.get("position", ""),
                 "deducted_profit_growth": finance_report.get("deducted_profit_growth"),
                 "deducted_profit_growth_report_date": finance_report.get("report_date", ""),
                 "deducted_profit_growth_report_name": finance_report.get("report_name", ""),
@@ -1439,6 +1193,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "diluted_eps_report_date": finance_report.get("diluted_eps_report_date", ""),
                 "diluted_eps_report_name": finance_report.get("diluted_eps_report_name", ""),
                 "finance_report_changed": finance_report.get("report_changed", False),
+                "industry_name": finance_report.get("industry_name", ""),
                 "narrow_fcf": narrow_fcf,
                 "manual_narrow_fcf": manual_narrow_fcf,
                 "manual_narrow_fcf_report_date": manual_narrow_fcf_report_date,
@@ -1462,18 +1217,9 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "ma120_close_price": None if not ma120_row else _to_float(ma120_row.get("close_price")),
                 "ma120": None if not ma120_row else _to_float(ma120_row.get("ma120")),
                 "ma120_position": ma120_position,
-                "value_bet_rate": value_bet_rate,
-                "previous_value_bet_rate_1": value_bet_rate_changes[1]["previous_value_bet_rate"],
-                "previous_value_bet_rate_date_1": value_bet_rate_changes[1]["previous_value_bet_rate_date"],
-                "value_bet_rate_change_1": value_bet_rate_changes[1]["value_bet_rate_change"],
-                "previous_value_bet_rate_7": value_bet_rate_changes[7]["previous_value_bet_rate"],
-                "previous_value_bet_rate_date_7": value_bet_rate_changes[7]["previous_value_bet_rate_date"],
-                "value_bet_rate_change_7": value_bet_rate_changes[7]["value_bet_rate_change"],
-                "previous_value_bet_rate_21": value_bet_rate_changes[21]["previous_value_bet_rate"],
-                "previous_value_bet_rate_date_21": value_bet_rate_changes[21]["previous_value_bet_rate_date"],
-                "value_bet_rate_change_21": value_bet_rate_changes[21]["value_bet_rate_change"],
                 "price_date": "" if price_row is None else _date_text(price_row.get("price_date")),
                 "current_price": current_price,
+                "market_cap": None if price_row is None else _to_float(price_row.get("market_cap")),
                 "dividend_year": dividend_year,
                 "dividend_per_10": round(dividend_per_10, 4),
                 "dividend_per_share": round(dividend_per_share, 4),
@@ -1487,13 +1233,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
         _schedule_dividend_history_refresh(stale_dividend_codes)
         _schedule_finance_report_refresh(stale_finance_codes)
         _schedule_cashflow_refresh(stale_cashflow_codes)
-        _write_value_bet_rate_snapshots(self.db, rows, now)
         rows.sort(key=lambda item: (item["dividend_yield"] is not None, item["dividend_yield"] or 0), reverse=True)
         payload = {
             "stock_count": len(stock_codes),
             "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "is_snapshot": False,
-            "snapshot_date": "",
             "cache_policy": {
                 "price": "盘中最多每30分钟刷新一次，盘后保持收盘价；外部请求间隔至少2秒",
                 "ma120": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的日MA120位置；外部请求间隔至少2秒",
@@ -1504,29 +1247,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
             "errors": errors,
             "data": rows,
         }
-        _write_high_dividend_list_snapshot(self.db, payload, now)
-        payload["snapshot_dates"] = _read_high_dividend_snapshot_dates(self.db)
         self.write(json.dumps(payload, ensure_ascii=False, default=_json_default))
-
-
-class HighDividendPositionHandler(webBase.BaseHandler):
-    def post(self):
-        _ensure_cache_tables(self.db)
-        self.set_header("Content-Type", "application/json;charset=UTF-8")
-        code = self.get_argument("code", default="", strip=True)
-        position = self.get_argument("position", default="", strip=True)
-        if not stocklist.is_a_stock_code(code):
-            self.set_status(400)
-            self.write(json.dumps({"success": False, "message": "股票代码无效"}, ensure_ascii=False))
-            return
-
-        _write_position_cache(self.db, code, position[:100])
-        self.write(json.dumps({
-            "success": True,
-            "code": code,
-            "position": position[:100],
-            "updated_at": _now().strftime("%Y-%m-%d %H:%M:%S"),
-        }, ensure_ascii=False))
 
 
 class HighDividendFcfHandler(webBase.BaseHandler):

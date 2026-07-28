@@ -35,7 +35,7 @@
         align-items: center;
         display: inline-flex;
         gap: 6px;
-        font-size: 14px;
+        font-size: 11px;
         line-height: 30px;
         margin: 0;
         margin-right: 12px;
@@ -197,7 +197,7 @@
 
     @media (max-width: 768px) {
         .high-dividend-page {
-            padding: 14px;
+            padding: 11px;
         }
 
         .high-dividend-actions {
@@ -225,9 +225,6 @@
                     <col style="width: 132px;">
                     <col style="width: 96px;">
                     <col style="width: 96px;">
-                    <col style="width: 96px;">
-                    <col style="width: 96px;">
-                    <col style="width: 96px;">
                     <col style="width: 112px;">
                     <col style="width: 112px;">
                     <col style="width: 112px;">
@@ -241,12 +238,9 @@
                         <th>代码<span class="column-resizer"></span></th>
                         <th class="sortable-header" data-sort-key="name">名称<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="deducted_profit_growth">扣非<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell">收益<span class="column-resizer"></span></th>
-                        <th class="number-cell">派息<span class="column-resizer"></span></th>
-                        <th class="number-cell">股价<span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="dividend_yield">股息率<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell">息增年<span class="column-resizer"></span></th>
-                        <th class="number-cell">窄口径FCF<span class="column-resizer"></span></th>
+                        <th class="number-cell">FCF<span class="column-resizer"></span></th>
                         <th class="number-cell">FCF/股息<span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="fcf_price">FCF/股价<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="ma120_position">日MA120<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
@@ -256,7 +250,7 @@
                 </thead>
                 <tbody id="dividendRows">
                     <tr>
-                        <td class="empty-state" colspan="14">加载中...</td>
+                        <td class="empty-state" colspan="11">加载中...</td>
                     </tr>
                 </tbody>
             </table>
@@ -413,7 +407,7 @@
     }
 
     function tableColumnCount() {
-        return 14;
+        return 11;
     }
 
     function updateSortIcons() {
@@ -454,15 +448,6 @@
                 escapeHtml(row.deducted_profit_growth_report_name ? row.deducted_profit_growth_report_name + '，公告 ' + (row.deducted_profit_growth_notice_date || '--') : ''),
                 '">',
                 formatBlankPercent(row.deducted_profit_growth),
-                '</td>',
-                '<td class="number-cell">',
-                formatOptionalNumber(row.diluted_eps, 2),
-                '</td>',
-                '<td class="number-cell">',
-                formatNumber(row.dividend_per_share, 2),
-                '</td>',
-                '<td class="number-cell">',
-                formatNumber(row.current_price, 2),
                 '</td>',
                 '<td class="number-cell yield-cell">',
                 formatPercent(row.dividend_yield),

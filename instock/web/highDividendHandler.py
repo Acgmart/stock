@@ -356,7 +356,7 @@ def _refresh_ma120_positions(stock_codes):
                 continue
 
             _throttle_external_request()
-            ma120_row = stocklist.fetch_daily_ma120_position(code, today=now.date())
+            ma120_row = stocklist.fetch_daily_ma120_position(code)
             if ma120_row is not None:
                 _write_ma120_cache(db, code, ma120_row, now)
     except Exception as error:

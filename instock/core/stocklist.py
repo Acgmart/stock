@@ -3,7 +3,6 @@
 
 import os
 import re
-import json
 
 import requests
 
@@ -146,35 +145,42 @@ def make_selected_stock_rows(date):
 
 
 def fetch_daily_ma120_position(code, today=None):
-    symbol = f"{'sh' if code.startswith('6') else 'sz'}{code}"
-    url = "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_/CN_MarketDataService.getKLineData"
+    """获取日K线MA120位置，使用腾讯前复权价格。
+
+    腾讯K线API返回前复权（qfq）日线数据，
+    确保MA120计算时历史价格已就除权除息进行调整，
+    与主流股票APP的MA120数值一致。
+    """
+    market = "sh" if code.startswith("6") else "sz"
+    url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     params = {
-        "symbol": symbol,
-        "scale": "240",
-        "ma": "120",
-        "datalen": "170",
+        "param": f"{market}{code},day,,,170,qfq",
     }
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Referer": "https://finance.sina.com.cn/",
+        "Referer": "https://gu.qq.com/",
     }
     response = requests.get(url, params=params, headers=headers, timeout=15)
     response.raise_for_status()
 
-    text = response.text
-    start = text.find("[")
-    end = text.rfind("]")
-    if start < 0 or end < start:
+    payload = response.json()
+    stock_data = payload.get("data", {}).get(f"{market}{code}")
+    if not stock_data:
+        return None
+    klines = stock_data.get("qfqday") or stock_data.get("day")
+    if not klines:
         return None
 
     rows = []
-    for item in json.loads(text[start:end + 1]):
-        close_price = _to_float(item.get("close"))
-        if close_price is None:
+    for item in klines:
+        if len(item) < 3:
             continue
-        try:
-            trade_date = item.get("day")[:10]
-        except Exception:
+        # item format: [date, open, close, high, low, volume, ...]
+        close_price = _to_float(item[2])
+        if close_price is None or close_price <= 0:
+            continue
+        trade_date = str(item[0])[:10]
+        if not trade_date:
             continue
         rows.append((trade_date, close_price))
 

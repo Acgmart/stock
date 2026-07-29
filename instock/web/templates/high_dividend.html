@@ -302,6 +302,7 @@
     const FILTER_STORAGE_KEY = "highDividendNegativeEpsFilterEnabled";
     const MIN_DIVIDEND_YIELD_STORAGE_KEY = "highDividendMinDividendYield";
     const MIN_MARKET_CAP_STORAGE_KEY = "highDividendMinMarketCap";
+    const SORT_STORAGE_KEY = "highDividendSortState";
     function formatNumber(value, digits) {
         if (value === null || value === undefined || Number.isNaN(Number(value))) {
             return "--";
@@ -478,6 +479,25 @@
         window.localStorage.setItem(MIN_MARKET_CAP_STORAGE_KEY, document.getElementById("minMarketCapFilter").value);
     }
 
+    function loadSortState() {
+        try {
+            const saved = JSON.parse(window.localStorage.getItem(SORT_STORAGE_KEY));
+            if (saved && saved.key && saved.direction) {
+                sortState.key = saved.key;
+                sortState.direction = saved.direction;
+            }
+        } catch (error) {
+            // ignore parse errors, keep defaults
+        }
+    }
+
+    function saveSortState() {
+        window.localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({
+            key: sortState.key,
+            direction: sortState.direction
+        }));
+    }
+
     function tableColumnCount() {
         return 10;
     }
@@ -636,6 +656,7 @@
     $(document).ready(function() {
         initColumnResizing();
         loadFilterState();
+        loadSortState();
         $("#negativeEpsFilter").on("change", function() {
             saveFilterState();
             renderRows(highDividendRows);
@@ -656,6 +677,7 @@
                 sortState.key = key;
                 sortState.direction = key === "name" ? "asc" : "desc";
             }
+            saveSortState();
             renderRows(highDividendRows);
         });
         loadHighDividendList();

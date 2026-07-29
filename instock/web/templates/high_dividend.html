@@ -438,7 +438,7 @@
         tbody.innerHTML = displayRows.map(function(row, index) {
             return [
                 '<tr>',
-                '<td><a href="https://quote.eastmoney.com/' + (row.code.charAt(0) === '6' ? 'sh' : 'sz') + row.code + '.html" target="_blank" rel="noopener noreferrer">',
+                '<td><a href="https://xueqiu.com/S/' + (row.code.charAt(0) === '6' ? 'SH' : 'SZ') + row.code + '" target="_blank" rel="noopener noreferrer">',
                 escapeHtml(row.code),
                 '</a></td>',
                 '<td class="',

@@ -210,9 +210,9 @@
     <div class="high-dividend-toolbar">
         <div style="display: flex; align-items: center; gap: 18px;">
             <h1 class="high-dividend-title" style="margin: 0;">高股息列表</h1>
-            <label class="filter-control" title="勾选后隐藏窄口径FCF为负或扣非低于-10%的股票">
+            <label class="filter-control" title="勾选后隐藏扣非低于-10%或每股收益为负的股票">
                 <span>过滤扣非与亏损</span>
-                <input id="negativeFcfFilter" type="checkbox" checked>
+                <input id="negativeEpsFilter" type="checkbox" checked>
             </label>
         </div>
     </div>
@@ -230,7 +230,6 @@
                     <col style="width: 112px;">
                     <col style="width: 112px;">
                     <col style="width: 112px;">
-                    <col style="width: 112px;">
                     <col style="width: 100px;">
                 </colgroup>
                 <thead>
@@ -240,7 +239,6 @@
                         <th class="number-cell sortable-header" data-sort-key="deducted_profit_growth">扣非<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="dividend_yield">股息率<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell">息增年<span class="column-resizer"></span></th>
-                        <th class="number-cell">FCF<span class="column-resizer"></span></th>
                         <th class="number-cell">FCF/股息<span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="fcf_price">FCF/股价<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="ma120_position">日MA120<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
@@ -250,7 +248,7 @@
                 </thead>
                 <tbody id="dividendRows">
                     <tr>
-                        <td class="empty-state" colspan="11">加载中...</td>
+                        <td class="empty-state" colspan="10">加载中...</td>
                     </tr>
                 </tbody>
             </table>
@@ -264,7 +262,7 @@
         key: "name",
         direction: "asc"
     };
-    const FILTER_STORAGE_KEY = "highDividendNegativeFcfFilterEnabled";
+    const FILTER_STORAGE_KEY = "highDividendNegativeEpsFilterEnabled";
     function formatNumber(value, digits) {
         if (value === null || value === undefined || Number.isNaN(Number(value))) {
             return "--";
@@ -272,18 +270,20 @@
         return Number(value).toFixed(digits);
     }
 
-    function formatPercent(value) {
+    function formatPercent(value, digits) {
+        if (digits === undefined) digits = 2;
         if (value === null || value === undefined || Number.isNaN(Number(value))) {
             return "--";
         }
-        return Number(value).toFixed(2) + "%";
+        return Number(value).toFixed(digits) + "%";
     }
 
-    function formatBlankPercent(value) {
+    function formatBlankPercent(value, digits) {
+        if (digits === undefined) digits = 2;
         if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) {
             return "";
         }
-        return Number(value).toFixed(2) + "%";
+        return Number(value).toFixed(digits) + "%";
     }
 
     function formatSignedPercent(value) {
@@ -360,16 +360,16 @@
     }
 
     function shouldHideByFilter(row) {
-        if (!document.getElementById("negativeFcfFilter").checked) {
+        if (!document.getElementById("negativeEpsFilter").checked) {
             return false;
         }
 
-        const hasNegativeFcf = !(
-            row.narrow_fcf === null
-            || row.narrow_fcf === undefined
-            || row.narrow_fcf === ""
-            || Number.isNaN(Number(row.narrow_fcf))
-        ) && Number(row.narrow_fcf) < 0;
+        const hasNegativeEps = !(
+            row.diluted_eps === null
+            || row.diluted_eps === undefined
+            || row.diluted_eps === ""
+            || Number.isNaN(Number(row.diluted_eps))
+        ) && Number(row.diluted_eps) < 0;
         const hasWeakDeductedProfit = !(
             row.deducted_profit_growth === null
             || row.deducted_profit_growth === undefined
@@ -377,7 +377,7 @@
             || Number.isNaN(Number(row.deducted_profit_growth))
         ) && Number(row.deducted_profit_growth) < -10;
 
-        return hasNegativeFcf || hasWeakDeductedProfit;
+        return hasNegativeEps || hasWeakDeductedProfit;
     }
 
     function visibleRows(rows) {
@@ -391,7 +391,7 @@
     }
 
     function isFilterEnabled() {
-        return document.getElementById("negativeFcfFilter").checked;
+        return document.getElementById("negativeEpsFilter").checked;
     }
 
     function loadFilterState() {
@@ -399,7 +399,7 @@
         if (savedValue === null) {
             return;
         }
-        document.getElementById("negativeFcfFilter").checked = savedValue === "true";
+        document.getElementById("negativeEpsFilter").checked = savedValue === "true";
     }
 
     function saveFilterState() {
@@ -407,7 +407,7 @@
     }
 
     function tableColumnCount() {
-        return 11;
+        return 10;
     }
 
     function updateSortIcons() {
@@ -447,43 +447,30 @@
                 '" title="',
                 escapeHtml(row.deducted_profit_growth_report_name ? row.deducted_profit_growth_report_name + '，公告 ' + (row.deducted_profit_growth_notice_date || '--') : ''),
                 '">',
-                formatBlankPercent(row.deducted_profit_growth),
+                formatBlankPercent(row.deducted_profit_growth, 1),
                 '</td>',
                 '<td class="number-cell yield-cell">',
-                formatPercent(row.dividend_yield),
+                formatPercent(row.dividend_yield, 1),
                 '</td>',
                 '<td class="number-cell">',
                 formatNumber(row.dividend_growth_years, 0),
                 '</td>',
-                '<td class="number-cell" title="',
-                escapeHtml(row.narrow_fcf_source === 'manual' ? (row.manual_narrow_fcf_stale ? '手动覆盖；年报已更新，请重新填写' : '手动覆盖；清空后使用抓取默认值') : ''),
-                '">',
-                '<div class="manual-number-editor',
-                row.manual_narrow_fcf_stale ? ' is-stale' : '',
-                '" contenteditable="true" data-field="narrow_fcf" data-code="',
-                escapeHtml(row.code),
-                '" data-last-saved-value="',
-                escapeHtml(formatOptionalNumber(row.narrow_fcf, 2)),
-                '">',
-                escapeHtml(formatOptionalNumber(row.narrow_fcf, 2)),
-                '</div>',
-                '</td>',
                 '<td class="number-cell fcf-dividend-cell">',
-                formatBlankPercent(row.fcf_dividend === null || row.fcf_dividend === undefined ? null : row.fcf_dividend * 100),
+                formatBlankPercent(row.fcf_dividend === null || row.fcf_dividend === undefined ? null : row.fcf_dividend * 100, 1),
                 '</td>',
                 '<td class="number-cell fcf-price-cell">',
-                formatBlankPercent(row.fcf_price),
+                formatBlankPercent(row.fcf_price, 1),
                 '</td>',
                 '<td class="number-cell" title="',
                 escapeHtml(row.ma120_trade_date ? row.ma120_trade_date + ' 收盘 ' + formatNumber(row.ma120_close_price, 2) + ' / MA120 ' + formatNumber(row.ma120, 2) : ''),
                 '">',
-                formatBlankPercent(row.ma120_position),
+                formatBlankPercent(row.ma120_position, 1),
                 '</td>',
                 '<td>',
                 escapeHtml(row.industry_name || ""),
                 '</td>',
                 '<td class="number-cell">',
-                formatOptionalNumber(row.market_cap, 2),
+                formatOptionalNumber(row.market_cap, 0),
                 '</td>',
                 '</tr>'
             ].join('');
@@ -519,52 +506,6 @@
                 loadHighDividendList();
             }
         }, 60 * 60 * 1000);
-    }
-
-    function saveNarrowFcf(input) {
-        const target = $(input);
-        const code = target.attr("data-code");
-        const narrowFcf = normalizeNumber(target.text());
-        const previousSavedValue = target.attr("data-last-saved-value") || "";
-        target.text(formatOptionalNumber(narrowFcf, 2));
-        target.removeClass("is-saved is-error");
-        $.post("/instock/high_dividend/fcf", {
-            code: code,
-            narrow_fcf: narrowFcf
-        }).done(function(response) {
-            if (typeof response === "string") {
-                response = JSON.parse(response);
-            }
-            const row = highDividendRows.find(function(item) {
-                return String(item.code) === code;
-            });
-            if (row) {
-                row.narrow_fcf = response.narrow_fcf;
-                row.manual_narrow_fcf = response.manual_narrow_fcf;
-                row.manual_narrow_fcf_report_date = response.manual_narrow_fcf_report_date;
-                row.manual_narrow_fcf_stale = response.manual_narrow_fcf_stale;
-                row.default_narrow_fcf = response.default_narrow_fcf;
-                row.narrow_fcf_source = response.narrow_fcf_source;
-                row.fcf_dividend = response.fcf_dividend;
-                row.fcf_price = response.fcf_price;
-                target.attr("data-last-saved-value", formatOptionalNumber(row.narrow_fcf, 2));
-                const tableRow = target.closest("tr");
-                target.text(formatOptionalNumber(row.narrow_fcf, 2));
-                target.toggleClass("is-stale", !!row.manual_narrow_fcf_stale);
-                target.closest("td").attr("title", row.narrow_fcf_source === 'manual' ? (row.manual_narrow_fcf_stale ? '手动覆盖；年报已更新，请重新填写' : '手动覆盖；清空后使用抓取默认值') : '');
-                tableRow.find(".fcf-dividend-cell").text(
-                    formatBlankPercent(row.fcf_dividend === null || row.fcf_dividend === undefined ? null : row.fcf_dividend * 100)
-                );
-                tableRow.find(".fcf-price-cell").text(formatBlankPercent(row.fcf_price));
-            }
-            target.addClass("is-saved");
-            window.setTimeout(function() {
-                target.removeClass("is-saved");
-            }, 1200);
-        }).fail(function() {
-            target.text(previousSavedValue);
-            target.addClass("is-error");
-        });
     }
 
     function loadColumnWidths() {
@@ -623,7 +564,7 @@
     $(document).ready(function() {
         initColumnResizing();
         loadFilterState();
-        $("#negativeFcfFilter").on("change", function() {
+        $("#negativeEpsFilter").on("change", function() {
             saveFilterState();
             renderRows(highDividendRows);
         });
@@ -636,20 +577,6 @@
                 sortState.direction = key === "name" ? "asc" : "desc";
             }
             renderRows(highDividendRows);
-        });
-        $("#dividendRows").on("blur", ".manual-number-editor", function() {
-            const value = formatOptionalNumber(normalizeNumber($(this).text()), 2);
-            if (this.dataset.lastSavedValue === value) {
-                $(this).text(value);
-                return;
-            }
-            saveNarrowFcf(this);
-        });
-        $("#dividendRows").on("keydown", ".manual-number-editor", function(event) {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                this.blur();
-            }
         });
         loadHighDividendList();
         startAfterCloseDividendRefresh();

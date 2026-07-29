@@ -34,7 +34,6 @@ class Application(tornado.web.Application):
             (r"/instock/", HomeHandler),
             (r"/instock/high_dividend", highDividendHandler.HighDividendPageHandler),
             (r"/instock/high_dividend/api", highDividendHandler.HighDividendDataHandler),
-            (r"/instock/high_dividend/fcf", highDividendHandler.HighDividendFcfHandler),
         ]
         settings = dict(  # 配置
             template_path=os.path.join(os.path.dirname(__file__), "templates"),

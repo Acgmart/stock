@@ -6,14 +6,13 @@
 ## 功能
 - 读取 `instock/config/stocklist.txt` 中的股票代码。
 - 拉取并缓存行情价格。
-- 支持手动维护窄口径 FCF。
-- 前端展示股息率、股息增长年、FCF/股息、FCF/股价和派息明细。
+- 前端展示股息率、股息增长年、FCF/股息、FCF/股价等。
 
 ## 配置股票列表
 instock/config/stocklist.txt
 每行一个股票代码，可带名称：
 600900 长江电力
-已经配置了300多只股息率大于3%的股票，每年。
+已经配置了300多只股息率大于3%的股票，每年5月1日更新。
 
 # 终端开启代理（可选）
 在～/.zshrc文件中添加一行：
@@ -52,7 +51,10 @@ docker run -d --name InStockDbService \
 
 ## Create Database
 等待 MariaDB 启动完成后，创建数据库：
-docker exec InStockDbService mariadb -u root -proot -e "CREATE DATABASE IF NOT EXISTS instockdb CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+docker exec InStockDbService mariadb -h 127.0.0.1 -u root -proot -e "CREATE DATABASE IF NOT EXISTS instockdb CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+
+查询当前的数据库列表：
+docker exec InStockDbService mariadb -h 127.0.0.1 -u root -proot -e "SHOW DATABASES;"
 
 ## 给本地仓库脚本可执行权限
 ls -l /Volumes/Game/Git/stock/instock/bin/*.sh

@@ -35,8 +35,10 @@ _FINANCE_REPORT_CACHE_TABLE = "cn_high_dividend_finance_report_cache"
 _CASHFLOW_CACHE_TABLE = "cn_high_dividend_cashflow_cache"
 _POSITION_CACHE_TABLE = "cn_high_dividend_position_cache"
 _MA120_CACHE_TABLE = "cn_high_dividend_ma120_cache"
+_PROFILE_CACHE_TABLE = "cn_high_dividend_profile_cache"
 _FINANCE_REPORT_REFRESH_LOCK = threading.Lock()
 _CASHFLOW_REFRESH_LOCK = threading.Lock()
+_PROFILE_REFRESH_LOCK = threading.Lock()
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _PRICE_REFRESH_MINUTES = 30
 _DIVIDEND_REFRESH_HOUR = 8
@@ -46,6 +48,7 @@ _REPORT_AFTER_CLOSE_REFRESH_INTERVAL_HOURS = 4
 _CASHFLOW_OFFSEASON_REFRESH_DAYS = 7
 _FINANCE_REPORT_REFRESH_RUNNING = False
 _CASHFLOW_REFRESH_RUNNING = False
+_PROFILE_REFRESH_RUNNING = False
 
 
 def _to_float(value):
@@ -107,7 +110,16 @@ def _ensure_cache_tables(db):
                 INDEX `idx_fetched_at` (`fetched_at`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
-        db.execute(f"ALTER TABLE `{_PRICE_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `market_cap` decimal(16,4) DEFAULT NULL")
+        db.execute(f"""
+            CREATE TABLE IF NOT EXISTS `{_PROFILE_CACHE_TABLE}` (
+                `code` varchar(6) NOT NULL,
+                `market_cap` decimal(16,4) DEFAULT NULL,
+                `industry_name` varchar(50) DEFAULT NULL,
+                `fetched_at` datetime NOT NULL,
+                PRIMARY KEY (`code`),
+                INDEX `idx_fetched_at` (`fetched_at`)
+            ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+        """)
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_DIVIDEND_HISTORY_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
@@ -212,7 +224,7 @@ def _read_price_cache(db, stock_codes):
         return []
     placeholders = ",".join(["%s"] * len(stock_codes))
     return db.query(f"""
-        SELECT `code`, `name`, `price_date`, `current_price`, `market_cap`, `fetched_at`, `market_phase`
+        SELECT `code`, `name`, `price_date`, `current_price`, `fetched_at`, `market_phase`
         FROM `{_PRICE_CACHE_TABLE}`
         WHERE `code` IN ({placeholders})
     """, *stock_codes)
@@ -226,13 +238,12 @@ def _write_price_cache(db, price_data, now):
             current_price = _to_float(row.get("pre_close_price"))
         db.execute(f"""
             INSERT INTO `{_PRICE_CACHE_TABLE}`
-                (`code`, `name`, `price_date`, `current_price`, `market_cap`, `fetched_at`, `market_phase`)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (`code`, `name`, `price_date`, `current_price`, `fetched_at`, `market_phase`)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 `name` = VALUES(`name`),
                 `price_date` = VALUES(`price_date`),
                 `current_price` = VALUES(`current_price`),
-                `market_cap` = VALUES(`market_cap`),
                 `fetched_at` = VALUES(`fetched_at`),
                 `market_phase` = VALUES(`market_phase`)
         """,
@@ -240,7 +251,6 @@ def _write_price_cache(db, price_data, now):
                    row.get("name"),
                    row.get("date"),
                    current_price,
-                   _to_float(row.get("market_cap")),
                    now.strftime("%Y-%m-%d %H:%M:%S"),
                    phase)
 
@@ -381,6 +391,97 @@ def _schedule_ma120_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_ma120_positions, args=(stock_codes,), daemon=True)
     thread.start()
+
+
+def _read_profile_cache(db, stock_codes):
+    if not stock_codes:
+        return {}
+    placeholders = ",".join(["%s"] * len(stock_codes))
+    rows = db.query(f"""
+        SELECT `code`, `market_cap`, `industry_name`, `fetched_at`
+        FROM `{_PROFILE_CACHE_TABLE}`
+        WHERE `code` IN ({placeholders})
+    """, *stock_codes)
+    return {row["code"]: row for row in rows}
+
+
+def _is_profile_cache_stale(cache_row, now):
+    if cache_row is None:
+        return True
+    fetched_at = cache_row.get("fetched_at")
+    if not fetched_at:
+        return True
+    phase = _market_phase(now)
+    if phase in ("intraday", "before_open"):
+        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
+        return fetched_at < close_time - datetime.timedelta(days=1)
+    if phase == "after_close":
+        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
+        return fetched_at < close_time
+    return fetched_at.date() < now.date()
+
+
+def _write_profile_cache(db, code, market_cap, industry_name, now):
+    db.execute(f"""
+        INSERT INTO `{_PROFILE_CACHE_TABLE}`
+            (`code`, `market_cap`, `industry_name`, `fetched_at`)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            `market_cap` = VALUES(`market_cap`),
+            `industry_name` = VALUES(`industry_name`),
+            `fetched_at` = VALUES(`fetched_at`)
+    """,
+               code,
+               market_cap,
+               industry_name,
+               now.strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def _refresh_profiles(stock_codes):
+    global _PROFILE_REFRESH_RUNNING
+    db = None
+    try:
+        _throttle_external_request()
+        profile_data = stocklist.fetch_profile_data(stock_codes)
+        if not profile_data:
+            return
+        db = mysql.Connection(**mdb.MYSQL_CONN)
+        _ensure_cache_tables(db)
+        now = _now()
+        for code in stock_codes:
+            info = profile_data.get(code, {})
+            market_cap = info.get("market_cap")
+            industry_name = info.get("industry_name", "")
+            _write_profile_cache(db, code, market_cap, industry_name, now)
+    except Exception as error:
+        print(f"highDividendHandler._refresh_profiles处理异常：{error}")
+    finally:
+        if db is not None:
+            db.close()
+        with _PROFILE_REFRESH_LOCK:
+            _PROFILE_REFRESH_RUNNING = False
+
+
+def _schedule_profile_refresh(stock_codes):
+    global _PROFILE_REFRESH_RUNNING
+    stock_codes = tuple(dict.fromkeys(stock_codes))
+    if not stock_codes:
+        return
+    phase = _market_phase(_now())
+    if phase == "intraday":
+        return
+    with _PROFILE_REFRESH_LOCK:
+        if _PROFILE_REFRESH_RUNNING:
+            return
+        _PROFILE_REFRESH_RUNNING = True
+
+    thread = threading.Thread(target=_refresh_profiles, args=(stock_codes,), daemon=True)
+    thread.start()
+
+
+def _get_cached_profile_rows(db, stock_codes):
+    """Read profile cache; returns dict keyed by code, missing entries have None value."""
+    return _read_profile_cache(db, stock_codes)
 
 
 def _write_fcf_cache(db, code, narrow_fcf, report_date):
@@ -781,7 +882,6 @@ def _get_cached_latest_finance_report(db, code):
         "notice_date": _date_text(row.get("NOTICE_DATE")),
         "deducted_profit": _to_float(row.get("KCFJCXSYJLR")),
         "report_changed": report_changed,
-        "industry_name": row.get("INDUSTRY_NAME") or "",
         **annual_eps,
     }, is_stale
 
@@ -1108,11 +1208,16 @@ class HighDividendDataHandler(webBase.BaseHandler):
         errors = []
 
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
+        profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
         manual_by_code = _read_manual_cache(self.db, stock_codes)
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         stale_ma120_codes = [
             code for code in stock_codes
             if _is_ma120_cache_stale(ma120_by_code.get(code), now)
+        ]
+        stale_profile_codes = [
+            code for code in stock_codes
+            if _is_profile_cache_stale(profile_by_code.get(code), now)
         ]
         stale_dividend_codes = []
         stale_finance_codes = []
@@ -1193,7 +1298,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "diluted_eps_report_date": finance_report.get("diluted_eps_report_date", ""),
                 "diluted_eps_report_name": finance_report.get("diluted_eps_report_name", ""),
                 "finance_report_changed": finance_report.get("report_changed", False),
-                "industry_name": finance_report.get("industry_name", ""),
+                "industry_name": "" if profile_by_code.get(code) is None else (profile_by_code[code].get("industry_name") or ""),
                 "narrow_fcf": narrow_fcf,
                 "manual_narrow_fcf": manual_narrow_fcf,
                 "manual_narrow_fcf_report_date": manual_narrow_fcf_report_date,
@@ -1219,7 +1324,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "ma120_position": ma120_position,
                 "price_date": "" if price_row is None else _date_text(price_row.get("price_date")),
                 "current_price": current_price,
-                "market_cap": None if price_row is None else _to_float(price_row.get("market_cap")),
+                "market_cap": None if profile_by_code.get(code) is None else _to_float(profile_by_code[code].get("market_cap")),
                 "dividend_year": dividend_year,
                 "dividend_per_10": round(dividend_per_10, 4),
                 "dividend_per_share": round(dividend_per_share, 4),
@@ -1230,6 +1335,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
             })
 
         _schedule_ma120_refresh(stale_ma120_codes)
+        _schedule_profile_refresh(stale_profile_codes)
         _schedule_dividend_history_refresh(stale_dividend_codes)
         _schedule_finance_report_refresh(stale_finance_codes)
         _schedule_cashflow_refresh(stale_cashflow_codes)
@@ -1239,6 +1345,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
             "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             "cache_policy": {
                 "price": "盘中最多每30分钟刷新一次，盘后保持收盘价；外部请求间隔至少2秒",
+                "profile": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新市值与行业（每日一次）；外部请求间隔至少2秒",
                 "ma120": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的日MA120位置；外部请求间隔至少2秒",
                 "dividend_history": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
                 "finance_report": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
@@ -1250,66 +1357,3 @@ class HighDividendDataHandler(webBase.BaseHandler):
         self.write(json.dumps(payload, ensure_ascii=False, default=_json_default))
 
 
-class HighDividendFcfHandler(webBase.BaseHandler):
-    def post(self):
-        _ensure_cache_tables(self.db)
-        self.set_header("Content-Type", "application/json;charset=UTF-8")
-        code = self.get_argument("code", default="", strip=True)
-        fcf_text = self.get_argument("narrow_fcf", default="", strip=True)
-        if not stocklist.is_a_stock_code(code):
-            self.set_status(400)
-            self.write(json.dumps({"success": False, "message": "股票代码无效"}, ensure_ascii=False))
-            return
-
-        manual_narrow_fcf = None if fcf_text == "" else _to_float(fcf_text)
-        if fcf_text != "" and manual_narrow_fcf is None:
-            self.set_status(400)
-            self.write(json.dumps({"success": False, "message": "FCF格式无效"}, ensure_ascii=False))
-            return
-
-        annual_fcf, _ = _get_cached_annual_narrow_fcf(self.db, code)
-        current_report_date = annual_fcf.get("narrow_fcf_report_date", "")
-        default_narrow_fcf = annual_fcf.get("narrow_fcf")
-        if manual_narrow_fcf is not None and _is_same_narrow_fcf_value(manual_narrow_fcf, default_narrow_fcf):
-            self.set_status(409)
-            self.write(json.dumps({
-                "success": False,
-                "message": "手动值与抓取默认值相同，无需覆盖",
-            }, ensure_ascii=False))
-            return
-
-        _write_fcf_cache(self.db, code, manual_narrow_fcf, current_report_date)
-        price_row = _read_price_cache(self.db, [code])
-        current_price = None if not price_row else _to_float(price_row[0].get("current_price"))
-        _, dividend_history = _read_dividend_history_cache(self.db, code)
-        dividend_year = _latest_dividend_year(dividend_history)
-        dividend_per_10, _ = _sum_fiscal_year_dividend(dividend_history, dividend_year)
-        dividend_per_share = dividend_per_10 / 10
-        effective_narrow_fcf = manual_narrow_fcf if manual_narrow_fcf is not None else default_narrow_fcf
-        manual_report_date = current_report_date if manual_narrow_fcf is not None else ""
-        manual_narrow_fcf_stale = _is_manual_narrow_fcf_stale(
-            manual_narrow_fcf,
-            manual_report_date,
-            current_report_date
-        )
-        fcf_dividend = None
-        fcf_price = None
-        if effective_narrow_fcf is not None:
-            if dividend_per_share > 0:
-                fcf_dividend = effective_narrow_fcf / dividend_per_share
-            if current_price and current_price > 0:
-                fcf_price = effective_narrow_fcf / current_price * 100
-
-        self.write(json.dumps({
-            "success": True,
-            "code": code,
-            "narrow_fcf": effective_narrow_fcf,
-            "manual_narrow_fcf": manual_narrow_fcf,
-            "manual_narrow_fcf_report_date": manual_report_date,
-            "manual_narrow_fcf_stale": manual_narrow_fcf_stale,
-            "default_narrow_fcf": default_narrow_fcf,
-            "narrow_fcf_source": "manual" if manual_narrow_fcf is not None else "default",
-            "fcf_dividend": fcf_dividend,
-            "fcf_price": fcf_price,
-            "updated_at": _now().strftime("%Y-%m-%d %H:%M:%S"),
-        }, ensure_ascii=False))

@@ -55,6 +55,40 @@ def is_a_stock_code(code):
     return str(code).startswith(('600', '601', '603', '605', '000', '001', '002', '003', '300', '301'))
 
 
+def fetch_profile_data(codes):
+    """Fetch market_cap (f20) and industry (f100) from Eastmoney batch API once daily."""
+    if not codes:
+        return {}
+    secids = ",".join(f"{'1' if c.startswith('6') else '0'}.{c}" for c in codes)
+    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    params = {
+        "fltt": "2",
+        "invt": "2",
+        "secids": secids,
+        "fields": "f12,f20,f100",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+        result = {}
+        if payload.get("data") and payload["data"].get("diff"):
+            for item in payload["data"]["diff"]:
+                code = item.get("f12", "")
+                market_cap = _to_float(item.get("f20"))
+                result[code] = {
+                    "market_cap": market_cap / 100000000 if market_cap else None,  # 转为亿
+                    "industry_name": item.get("f100", ""),
+                }
+        return result
+    except Exception:
+        return {}
+
+
 def make_selected_stock_rows(date):
     codes = [code for code in get_stock_codes() if is_a_stock_code(code)]
     if not codes:
@@ -106,7 +140,6 @@ def make_selected_stock_rows(date):
             "high_price": high_price,
             "low_price": low_price,
             "pre_close_price": pre_close,
-            "market_cap": _to_float(fields[44]) / 10000 if len(fields) >= 45 and fields[44] else None,
         })
 
     return rows or None

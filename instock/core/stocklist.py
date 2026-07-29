@@ -3,11 +3,26 @@
 
 import os
 import re
+import time
+import threading
 
 import requests
 
 __author__ = 'myh '
 __date__ = '2026/5/12 '
+
+_REQUEST_LOCK = threading.Lock()
+_LAST_REQUEST_AT = 0.0
+_REQUEST_INTERVAL_SECONDS = 2
+
+
+def _throttle_request():
+    global _LAST_REQUEST_AT
+    with _REQUEST_LOCK:
+        elapsed = time.time() - _LAST_REQUEST_AT
+        if elapsed < _REQUEST_INTERVAL_SECONDS:
+            time.sleep(_REQUEST_INTERVAL_SECONDS - elapsed)
+        _LAST_REQUEST_AT = time.time()
 
 DEFAULT_STOCK_CODES = ("600900",)
 _CODE_PATTERN = re.compile(r"(?<!\d)(?:sh|sz|bj)?(\d{6})(?!\d)", re.IGNORECASE)
@@ -55,80 +70,146 @@ def is_a_stock_code(code):
 
 
 def fetch_profile_data(codes):
-    """Fetch market_cap (f20) and industry (f100) from Eastmoney batch API once daily."""
+    """从腾讯获取市值，从东方财富获取行业，每日批量刷新一次。
+
+    由于 push2.eastmoney.com 不可达，拆分为两个独立数据源：
+    - 市值：腾讯 qt.gtimg.cn 行情接口，field 44 为总市值（亿）
+    - 行业：东方财富 datacenter RPT_F10_ORG_BASICINFO，取 BOARD_NAME_2LEVEL（申万二级）
+    """
     if not codes:
         return {}
-    secids = ",".join(f"{'1' if c.startswith('6') else '0'}.{c}" for c in codes)
-    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    codes = list(codes)
+    result = {code: {"market_cap": None, "industry_name": ""} for code in codes}
+
+    # 1. 市值 — 腾讯行情接口（批量）
+    _fetch_market_cap_from_tencent(codes, result)
+
+    # 2. 行业 — 东方财富 F10 接口（批量，datacenter 域可通）
+    _fetch_industry_from_eastmoney(codes, result)
+
+    return result
+
+
+def _fetch_market_cap_from_tencent(codes, result):
+    """从腾讯行情接口批量获取总市值（亿）。"""
+    symbols = ",".join(f"{'sh' if c.startswith('6') else 'sz'}{c}" for c in codes)
+    url = f"https://qt.gtimg.cn/q={symbols}"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://gu.qq.com/",
+    }
+    try:
+        _throttle_request()
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        for line in resp.text.strip().split(";"):
+            if '="' not in line:
+                continue
+            name_part, data = line.split('="', 1)
+            symbol = name_part.split("_")[-1]
+            code = symbol[-6:]
+            fields = data.strip('"').split("~")
+            if len(fields) > 44:
+                market_cap = _to_float(fields[44])
+                if code in result and market_cap is not None:
+                    result[code]["market_cap"] = market_cap
+    except Exception:
+        pass
+
+
+def _fetch_industry_from_eastmoney(codes, result):
+    """从东方财富 F10 批量获取申万二级行业。"""
+    code_list = '","'.join(codes)
+    url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
     params = {
-        "fltt": "2",
-        "invt": "2",
-        "secids": secids,
-        "fields": "f12,f20,f100",
+        "reportName": "RPT_F10_ORG_BASICINFO",
+        "columns": "SECURITY_CODE,BOARD_NAME_2LEVEL",
+        "filter": f'(SECURITY_CODE in ("{code_list}"))',
+        "pageNumber": "1",
+        "pageSize": str(len(codes) + 10),
+        "source": "HSF10",
     }
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://quote.eastmoney.com/",
     }
     try:
+        _throttle_request()
         resp = requests.get(url, params=params, headers=headers, timeout=15)
         resp.raise_for_status()
         payload = resp.json()
-        result = {}
-        if payload.get("data") and payload["data"].get("diff"):
-            for item in payload["data"]["diff"]:
-                code = item.get("f12", "")
-                market_cap = _to_float(item.get("f20"))
-                result[code] = {
-                    "market_cap": market_cap / 100000000 if market_cap else None,  # 转为亿
-                    "industry_name": item.get("f100", ""),
-                }
-        return result
+        if payload.get("success") and payload.get("result", {}).get("data"):
+            for row in payload["result"]["data"]:
+                code = row.get("SECURITY_CODE", "")
+                if code in result:
+                    result[code]["industry_name"] = row.get("BOARD_NAME_2LEVEL") or ""
     except Exception:
-        return {}
+        pass
 
 
 def make_selected_stock_rows(date):
+    """从腾讯行情接口批量获取实时股价数据。
+
+    原使用新浪 hq.sinajs.cn，该域名已不可达（403）。
+    """
     codes = [code for code in get_stock_codes() if is_a_stock_code(code)]
     if not codes:
         return None
 
     symbols = ",".join(f"{'sh' if code.startswith('6') else 'sz'}{code}" for code in codes)
-    url = f"https://hq.sinajs.cn/list={symbols}"
+    url = f"https://qt.gtimg.cn/q={symbols}"
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Referer": "https://finance.sina.com.cn/",
+        "Referer": "https://gu.qq.com/",
     }
+    _throttle_request()
     response = requests.get(url, headers=headers, timeout=15)
     response.raise_for_status()
-    response.encoding = "gb18030"
 
     rows = []
-    for item in response.text.strip().split(";"):
-        if not item.strip() or '="' not in item:
+    for line in response.text.strip().split(";"):
+        if '="' not in line:
             continue
-        symbol = item.split("=", 1)[0].rsplit("_", 1)[-1]
+        symbol_part, data = line.split('="', 1)
+        symbol = symbol_part.split("_")[-1]
         code = symbol[-6:]
-        fields = item.split('="', 1)[1].strip('"').split(",")
-        if len(fields) < 32 or not fields[0]:
+        fields = data.strip('"').split("~")
+        if len(fields) < 38 or not fields[1]:
             continue
 
-        open_price = _to_float(fields[1])
-        pre_close = _to_float(fields[2])
+        # Tencent qt 字段（0-indexed）:
+        # 1=名称 3=现价 4=昨收 5=今开 6=成交量(手)
+        # 30=日期时间(YYYYMMDDHHMMSS) 31=涨跌额 32=涨跌幅%
+        # 33=最高 34=最低 35=现价/成交量/成交额(元)
+        # 37=成交额(万元)
+        name = fields[1]
+        open_price = _to_float(fields[5])
+        pre_close = _to_float(fields[4])
         new_price = _to_float(fields[3])
-        high_price = _to_float(fields[4])
-        low_price = _to_float(fields[5])
-        volume = _to_float(fields[8])
-        deal_amount = _to_float(fields[9])
+        high_price = _to_float(fields[33])
+        low_price = _to_float(fields[34])
+        volume = _to_float(fields[6])
+
+        # 成交额：优先从 field 35 解析（格式 现价/成交量/成交额），否则用 field 37 (万元)
+        deal_amount = None
+        if len(fields) > 35 and fields[35]:
+            parts = fields[35].split("/")
+            if len(parts) >= 3:
+                deal_amount = _to_float(parts[2])
+        if deal_amount is None and len(fields) > 37:
+            deal_amount_wan = _to_float(fields[37])
+            if deal_amount_wan is not None:
+                deal_amount = deal_amount_wan * 10000
+
         change = None if new_price is None or pre_close in (None, 0) else new_price - pre_close
-        change_rate = None if change is None else change / pre_close * 100
+        change_rate = _to_float(fields[32])
         amplitude = None if high_price is None or low_price is None or pre_close in (None, 0) else (
             high_price - low_price) / pre_close * 100
 
         rows.append({
-            "date": date.strftime("%Y-%m-%d") if date is not None else fields[30],
+            "date": date.strftime("%Y-%m-%d") if date is not None else fields[30][:10],
             "code": code,
-            "name": fields[0],
+            "name": name,
             "new_price": new_price,
             "change_rate": change_rate,
             "ups_downs": change,
@@ -160,6 +241,7 @@ def fetch_daily_ma120_position(code, today=None):
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://gu.qq.com/",
     }
+    _throttle_request()
     response = requests.get(url, params=params, headers=headers, timeout=15)
     response.raise_for_status()
 

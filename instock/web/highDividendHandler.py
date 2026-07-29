@@ -33,7 +33,6 @@ _PRICE_CACHE_TABLE = "cn_high_dividend_price_cache"
 _DIVIDEND_HISTORY_CACHE_TABLE = "cn_high_dividend_dividend_history_cache"
 _FINANCE_REPORT_CACHE_TABLE = "cn_high_dividend_finance_report_cache"
 _CASHFLOW_CACHE_TABLE = "cn_high_dividend_cashflow_cache"
-_POSITION_CACHE_TABLE = "cn_high_dividend_position_cache"
 _MA120_CACHE_TABLE = "cn_high_dividend_ma120_cache"
 _PROFILE_CACHE_TABLE = "cn_high_dividend_profile_cache"
 _FINANCE_REPORT_REFRESH_LOCK = threading.Lock()
@@ -166,15 +165,6 @@ def _ensure_cache_tables(db):
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
         db.execute(f"""
-            CREATE TABLE IF NOT EXISTS `{_POSITION_CACHE_TABLE}` (
-                `code` varchar(6) NOT NULL,
-                `narrow_fcf` decimal(12,4) DEFAULT NULL,
-                `narrow_fcf_report_date` date DEFAULT NULL,
-                `updated_at` datetime NOT NULL,
-                PRIMARY KEY (`code`)
-            ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
-        """)
-        db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_MA120_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
                 `trade_date` date DEFAULT NULL,
@@ -260,7 +250,6 @@ def _get_cached_price_rows(db, stock_codes, errors):
     cached_rows = _read_price_cache(db, stock_codes)
     if _is_price_cache_stale(cached_rows, stock_codes, now):
         try:
-            _throttle_external_request()
             price_data = stocklist.make_selected_stock_rows(now.date())
             if price_data is not None:
                 _write_price_cache(db, price_data, now)
@@ -268,24 +257,6 @@ def _get_cached_price_rows(db, stock_codes, errors):
         except Exception as error:
             errors.append(f"行情缓存刷新失败，已使用旧缓存：{error}")
     return {row["code"]: row for row in cached_rows}
-
-
-def _read_manual_cache(db, stock_codes):
-    if not stock_codes:
-        return {}
-    placeholders = ",".join(["%s"] * len(stock_codes))
-    rows = db.query(f"""
-        SELECT `code`, `narrow_fcf`, `narrow_fcf_report_date`
-        FROM `{_POSITION_CACHE_TABLE}`
-        WHERE `code` IN ({placeholders})
-    """, *stock_codes)
-    return {
-        row["code"]: {
-            "narrow_fcf": _to_float(row.get("narrow_fcf")),
-            "narrow_fcf_report_date": _date_text(row.get("narrow_fcf_report_date")),
-        }
-        for row in rows
-    }
 
 
 def _read_ma120_cache(db, stock_codes):
@@ -355,7 +326,6 @@ def _refresh_ma120_positions(stock_codes):
             if not _is_ma120_cache_stale(cache_row, now):
                 continue
 
-            _throttle_external_request()
             ma120_row = stocklist.fetch_daily_ma120_position(code)
             if ma120_row is not None:
                 _write_ma120_cache(db, code, ma120_row, now)
@@ -441,7 +411,6 @@ def _refresh_profiles(stock_codes):
     global _PROFILE_REFRESH_RUNNING
     db = None
     try:
-        _throttle_external_request()
         profile_data = stocklist.fetch_profile_data(stock_codes)
         if not profile_data:
             return
@@ -482,22 +451,6 @@ def _schedule_profile_refresh(stock_codes):
 def _get_cached_profile_rows(db, stock_codes):
     """Read profile cache; returns dict keyed by code, missing entries have None value."""
     return _read_profile_cache(db, stock_codes)
-
-
-def _write_fcf_cache(db, code, narrow_fcf, report_date):
-    db.execute(f"""
-        INSERT INTO `{_POSITION_CACHE_TABLE}`
-            (`code`, `narrow_fcf`, `narrow_fcf_report_date`, `updated_at`)
-        VALUES (%s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            `narrow_fcf` = VALUES(`narrow_fcf`),
-            `narrow_fcf_report_date` = VALUES(`narrow_fcf_report_date`),
-            `updated_at` = VALUES(`updated_at`)
-    """,
-               code,
-               narrow_fcf,
-               report_date if narrow_fcf is not None else None,
-               _now().strftime("%Y-%m-%d %H:%M:%S"))
 
 
 def _fetch_dividend_history(code):
@@ -1089,25 +1042,6 @@ def _calculate_financial_annual_eps(finance_history):
     }
 
 
-def _is_manual_narrow_fcf_stale(manual_narrow_fcf, manual_report_date, current_report_date):
-    if manual_narrow_fcf is None:
-        return False
-    manual_report_date = _date_text(manual_report_date)
-    current_report_date = _date_text(current_report_date)
-    if not manual_report_date or not current_report_date:
-        return False
-    return current_report_date > manual_report_date
-
-
-def _is_same_narrow_fcf_value(left, right):
-    if left is None or right is None:
-        return False
-    try:
-        return Decimal(str(left)).quantize(Decimal("0.01")) == Decimal(str(right)).quantize(Decimal("0.01"))
-    except Exception:
-        return False
-
-
 def _get_cached_annual_narrow_fcf(db, code):
     now = _now()
     finance_cache_row, finance_history = _read_finance_report_cache(db, code)
@@ -1209,7 +1143,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
 
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
         profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
-        manual_by_code = _read_manual_cache(self.db, stock_codes)
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         stale_ma120_codes = [
             code for code in stock_codes
@@ -1261,19 +1194,9 @@ class HighDividendDataHandler(webBase.BaseHandler):
             dividend_yield = None
             if current_price and current_price > 0:
                 dividend_yield = dividend_per_share / current_price * 100
-            manual_row = manual_by_code.get(code, {})
             ma120_row = ma120_by_code.get(code, {})
             ma120_position = None if not ma120_row else _to_float(ma120_row.get("ma120_position"))
-            default_narrow_fcf = annual_fcf.get("narrow_fcf")
-            manual_narrow_fcf = manual_row.get("narrow_fcf")
-            manual_narrow_fcf_report_date = manual_row.get("narrow_fcf_report_date", "")
-            manual_narrow_fcf_stale = _is_manual_narrow_fcf_stale(
-                manual_narrow_fcf,
-                manual_narrow_fcf_report_date,
-                annual_fcf.get("narrow_fcf_report_date", "")
-            )
-            narrow_fcf = manual_narrow_fcf if manual_narrow_fcf is not None else default_narrow_fcf
-            narrow_fcf_source = "manual" if manual_narrow_fcf is not None else "default"
+            narrow_fcf = annual_fcf.get("narrow_fcf")
             fcf_dividend = None
             fcf_price = None
             if narrow_fcf is not None:
@@ -1300,11 +1223,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "finance_report_changed": finance_report.get("report_changed", False),
                 "industry_name": "" if profile_by_code.get(code) is None else (profile_by_code[code].get("industry_name") or ""),
                 "narrow_fcf": narrow_fcf,
-                "manual_narrow_fcf": manual_narrow_fcf,
-                "manual_narrow_fcf_report_date": manual_narrow_fcf_report_date,
-                "manual_narrow_fcf_stale": manual_narrow_fcf_stale,
-                "default_narrow_fcf": default_narrow_fcf,
-                "narrow_fcf_source": narrow_fcf_source,
                 "narrow_fcf_report_date": annual_fcf.get("narrow_fcf_report_date", ""),
                 "narrow_fcf_report_name": annual_fcf.get("narrow_fcf_report_name", ""),
                 "narrow_fcf_total": annual_fcf.get("narrow_fcf_total"),

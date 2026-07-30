@@ -115,7 +115,7 @@
 
     .table.high-dividend-table > thead > tr > th:last-child,
     .table.high-dividend-table > tbody > tr > td:last-child {
-        border-right: 1px solid #d7ddea;
+        border-right: none;
     }
 
     .column-resizer {
@@ -256,6 +256,7 @@
                     <col style="width: 112px;">
                     <col style="width: 112px;">
                     <col style="width: 100px;">
+                    <col style="width: 82px;">
                 </colgroup>
                 <thead>
                     <tr>
@@ -269,6 +270,7 @@
                         <th class="number-cell sortable-header" data-sort-key="ma120_position">日MA120<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="sortable-header" data-sort-key="industry_name">行业<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="market_cap">市值<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
+                        <th class="number-cell sortable-header" data-sort-key="low20_bounce">反弹<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                     </tr>
                 </thead>
                 <tbody id="dividendRows">
@@ -371,6 +373,9 @@
         }
         if (sortState.key === "market_cap") {
             return direction * (parseNullableNumber(left.market_cap) - parseNullableNumber(right.market_cap));
+        }
+        if (sortState.key === "low20_bounce") {
+            return direction * (parseNullableNumber(left.low20_bounce) - parseNullableNumber(right.low20_bounce));
         }
 
         const leftValue = left.dividend_yield === null || left.dividend_yield === undefined ? -Infinity : Number(left.dividend_yield);
@@ -534,7 +539,7 @@
     }
 
     function tableColumnCount() {
-        return 10;
+        return 11;
     }
 
     function updateSortIcons() {
@@ -599,6 +604,11 @@
                 '</td>',
                 '<td class="number-cell">',
                 formatOptionalNumber(row.market_cap, 0),
+                '</td>',
+                '<td class="number-cell" title="',
+                escapeHtml(row.low20_lowest_date ? '近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
+                '">',
+                formatBlankPercent(row.low20_bounce, 1),
                 '</td>',
                 '</tr>'
             ].join('');

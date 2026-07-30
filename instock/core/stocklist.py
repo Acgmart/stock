@@ -286,6 +286,65 @@ def fetch_daily_ma120_position(code, today=None):
     }
 
 
+def fetch_20day_low_bounce(code):
+    """获取最近收盘价相对于最近20个交易日盘中最低价的反弹幅度，使用腾讯前复权价格。"""
+    market = "sh" if code.startswith("6") else "sz"
+    url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+    params = {
+        "param": f"{market}{code},day,,,25,qfq",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://gu.qq.com/",
+    }
+    _throttle_request()
+    response = requests.get(url, params=params, headers=headers, timeout=15)
+    response.raise_for_status()
+
+    payload = response.json()
+    stock_data = payload.get("data", {}).get(f"{market}{code}")
+    if not stock_data:
+        return None
+    klines = stock_data.get("qfqday") or stock_data.get("day")
+    if not klines or len(klines) < 20:
+        return None
+
+    rows = []
+    for item in klines:
+        if len(item) < 5:
+            continue
+        # item format: [date, open, close, high, low, volume, ...]
+        close_price = _to_float(item[2])
+        low_price = _to_float(item[4])
+        if close_price is None or close_price <= 0:
+            continue
+        if low_price is None or low_price <= 0:
+            continue
+        trade_date = str(item[0])[:10]
+        if not trade_date:
+            continue
+        rows.append((trade_date, close_price, low_price))
+
+    if len(rows) < 20:
+        return None
+
+    recent_20 = rows[-20:]
+    lowest_row = min(recent_20, key=lambda r: r[2])
+    lowest_trade_date, _, lowest_low = lowest_row
+    current_trade_date, current_close, _ = rows[-1]
+
+    if lowest_low <= 0:
+        return None
+
+    return {
+        "trade_date": current_trade_date,
+        "close_price": current_close,
+        "lowest_date": lowest_trade_date,
+        "lowest_low": lowest_low,
+        "bounce_position": (current_close / lowest_low - 1) * 100,
+    }
+
+
 def _to_float(value):
     try:
         return float(value)

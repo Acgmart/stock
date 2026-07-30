@@ -55,6 +55,29 @@ def _read_codes_from_file(path):
     return codes
 
 
+def get_stock_names():
+    """从 stocklist.txt 读取股票代码到名称的映射。"""
+    names = {}
+    for path in _candidate_paths():
+        if not path or not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8") as file:
+            for line in file:
+                line = line.split("#", 1)[0].split("//", 1)[0].strip()
+                if not line:
+                    continue
+                match = _CODE_PATTERN.search(line)
+                if match:
+                    code = match.group(1)
+                    name_start = match.end()
+                    name = line[name_start:].strip()
+                    if code not in names:
+                        names[code] = name
+        if names:
+            return names
+    return names
+
+
 def get_stock_codes():
     for path in _candidate_paths():
         codes = _read_codes_from_file(path)

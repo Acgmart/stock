@@ -1266,6 +1266,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
         stock_codes = [code for code in stocklist.get_stock_codes() if stocklist.is_a_stock_code(code)]
         rows = []
         errors = []
+        stock_names = stocklist.get_stock_names()
 
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
         profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
@@ -1337,9 +1338,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     fcf_dividend = narrow_fcf / dividend_per_share
                 if current_price and current_price > 0:
                     fcf_price = narrow_fcf / current_price * 100
-            name = "" if price_row is None else price_row.get("name")
-            if not name and details:
-                name = details[0].get("name", "")
+            name = stock_names.get(code, "")
 
             rows.append({
                 "code": code,

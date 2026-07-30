@@ -185,8 +185,9 @@
         font-weight: 600;
     }
 
-    .name-cell {
-        user-select: none;
+    .dividend-changed-name {
+        color: #067647;
+        font-weight: 600;
     }
 
     .name-cell-watched {
@@ -570,7 +571,7 @@
                 escapeHtml(row.code),
                 '</a></td>',
                 '<td class="name-cell',
-                (row.dividend_changed || row.finance_report_changed) ? ' changed-name' : '',
+                row.finance_report_changed ? ' changed-name' : (row.dividend_changed ? ' dividend-changed-name' : ''),
                 isWatched(row.code) ? ' name-cell-watched' : '',
                 '" data-code="', escapeHtml(row.code), '">',
                 escapeHtml(row.name),
@@ -606,7 +607,7 @@
                 formatOptionalNumber(row.market_cap, 0),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml(row.low20_lowest_date ? '近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
+                escapeHtml(row.low20_trade_date ? row.low20_trade_date + ' 收盘 ' + formatNumber(row.low20_close_price, 2) + ' / 近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
                 '">',
                 formatBlankPercent(row.low20_bounce, 1),
                 '</td>',

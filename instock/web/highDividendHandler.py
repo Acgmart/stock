@@ -13,6 +13,7 @@ import instock.lib.database as mdb
 import instock.lib.mysql as mysql
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
 import instock.core.stocklist as stocklist
+import instock.core.followlist as followlist
 import instock.web.base as webBase
 
 __author__ = 'myh '
@@ -1273,5 +1274,23 @@ class HighDividendDataHandler(webBase.BaseHandler):
             "data": rows,
         }
         self.write(json.dumps(payload, ensure_ascii=False, default=_json_default))
+
+
+class FollowListHandler(webBase.BaseHandler):
+    def get(self):
+        self.set_header("Content-Type", "application/json;charset=UTF-8")
+        toggle_code = self.get_argument("toggle", "", True)
+        if toggle_code:
+            now_followed = followlist.toggle_follow(toggle_code)
+            self.write(json.dumps({
+                "code": toggle_code,
+                "followed": now_followed,
+            }, ensure_ascii=False))
+            return
+
+        codes = followlist.get_follow_codes()
+        self.write(json.dumps({
+            "follow_codes": codes,
+        }, ensure_ascii=False))
 
 

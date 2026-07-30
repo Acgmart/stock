@@ -14,6 +14,9 @@ instock/config/stocklist.txt
 600900 长江电力
 已经配置了300多只股息率大于3%的股票，每年5月1日更新。
 
+instock/config/followlist.txt
+点击股票名称可添加关注，没有followlist.txt时自动创建。
+
 # 终端开启代理（可选）
 在～/.zshrc文件中添加一行：
 alias daili='export http_proxy=http://127.0.0.1:7897; export https_proxy=http://127.0.0.1:7897; export all_proxy=socks5://127.0.0.1:7897'

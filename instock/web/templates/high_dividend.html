@@ -185,6 +185,17 @@
         font-weight: 600;
     }
 
+    .name-cell {
+        user-select: none;
+    }
+
+    .name-cell-watched {
+        background: #FFEBEE;
+    }
+
+    .high-dividend-table tbody tr:hover td.name-cell-watched {
+        background: #FFEBEE;
+    }
 
     .empty-state,
     .error-state {
@@ -215,6 +226,10 @@
             <label class="filter-control" title="勾选后隐藏扣非低于-10%或每股收益为负的股票">
                 <span>过滤扣非与亏损</span>
                 <input id="negativeEpsFilter" type="checkbox" checked>
+            </label>
+            <label class="filter-control" title="勾选后仅显示已关注的股票">
+                <span>关注</span>
+                <input id="watchFilter" type="checkbox">
             </label>
             <label class="filter-control" title="股息率低于此值的股票将被隐藏">
                 <span>最低股息率%</span>
@@ -276,6 +291,8 @@
     const MIN_DIVIDEND_YIELD_STORAGE_KEY = "highDividendMinDividendYield";
     const MIN_MARKET_CAP_STORAGE_KEY = "highDividendMinMarketCap";
     const SORT_STORAGE_KEY = "highDividendSortState";
+
+    let watchList = [];
     function formatNumber(value, digits) {
         if (value === null || value === undefined || Number.isNaN(Number(value))) {
             return "--";
@@ -368,6 +385,45 @@
         return Number(value);
     }
 
+    function loadWatchList() {
+        return $.getJSON("/instock/high_dividend/followlist")
+            .done(function(payload) {
+                watchList = payload.follow_codes || [];
+            })
+            .fail(function() {
+                watchList = [];
+            });
+    }
+
+    function isWatched(code) {
+        return watchList.indexOf(code) !== -1;
+    }
+
+    function toggleWatch(code) {
+        $.getJSON("/instock/high_dividend/followlist", {toggle: code})
+            .done(function(payload) {
+                if (payload.followed) {
+                    if (watchList.indexOf(code) === -1) {
+                        watchList.push(code);
+                    }
+                } else {
+                    const idx = watchList.indexOf(code);
+                    if (idx !== -1) {
+                        watchList.splice(idx, 1);
+                    }
+                }
+                renderRows(highDividendRows);
+            })
+            .fail(function() {
+                // 切换失败，刷新列表以保持同步
+                loadWatchList();
+            });
+    }
+
+    function isWatchFilterEnabled() {
+        return document.getElementById("watchFilter").checked;
+    }
+
     function sortedRows(rows) {
         return (rows || []).slice().sort(compareRows);
     }
@@ -388,6 +444,12 @@
             ) && Number(row.deducted_profit_growth) < -10;
 
             if (hasNegativeEps || hasWeakDeductedProfit) {
+                return true;
+            }
+        }
+
+        if (isWatchFilterEnabled()) {
+            if (!isWatched(row.code)) {
                 return true;
             }
         }
@@ -502,9 +564,10 @@
                 '<td><a href="https://xueqiu.com/S/' + (row.code.charAt(0) === '6' ? 'SH' : 'SZ') + row.code + '" target="_blank" rel="noopener noreferrer">',
                 escapeHtml(row.code),
                 '</a></td>',
-                '<td class="',
-                (row.dividend_changed || row.finance_report_changed) ? 'changed-name' : '',
-                '">',
+                '<td class="name-cell',
+                (row.dividend_changed || row.finance_report_changed) ? ' changed-name' : '',
+                isWatched(row.code) ? ' name-cell-watched' : '',
+                '" data-code="', escapeHtml(row.code), '">',
                 escapeHtml(row.name),
                 '</td>',
                 '<td class="number-cell',
@@ -642,6 +705,15 @@
             saveFilterState();
             renderRows(highDividendRows);
         });
+        $("#watchFilter").on("change", function() {
+            renderRows(highDividendRows);
+        });
+        $("#dividendRows").on("click", "td.name-cell", function() {
+            const code = $(this).attr("data-code");
+            if (code) {
+                toggleWatch(code);
+            }
+        });
         $(".sortable-header").on("click", function() {
             const key = $(this).data("sort-key");
             if (sortState.key === key) {
@@ -653,7 +725,9 @@
             saveSortState();
             renderRows(highDividendRows);
         });
-        loadHighDividendList();
+        loadWatchList().done(function() {
+            loadHighDividendList();
+        });
         startAfterCloseDividendRefresh();
     });
 </script>

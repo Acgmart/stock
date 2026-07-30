@@ -5,7 +5,6 @@ import os
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from pathlib import Path
 import time
 import random
 import threading
@@ -16,7 +15,7 @@ __date__ = '2025/12/31 '
 class eastmoney_fetcher:
     """
     东方财富网数据获取器
-    封装了Cookie管理、会话管理和请求发送功能
+    封装了会话管理和请求发送功能
     """
 
     _request_interval = 2
@@ -25,31 +24,7 @@ class eastmoney_fetcher:
 
     def __init__(self):
         """初始化获取器"""
-        self.base_dir = os.path.dirname(os.path.dirname(__file__))
         self.session = self._create_session()
-
-    def _get_cookie(self):
-        """
-        获取东方财富网的Cookie
-        优先级：环境变量 > 文件 > 默认Cookie
-        """
-        # 1. 尝试从环境变量获取
-        cookie = os.environ.get('EAST_MONEY_COOKIE')
-        if cookie:
-            # print("环境变量中的Cookie: 已设置")
-            return cookie
-
-        # 2. 尝试从文件获取
-        cookie_file = Path(os.path.join(self.base_dir, 'config', 'eastmoney_cookie.txt'))
-        if cookie_file.exists():
-            with open(cookie_file, 'r') as f:
-                cookie = f.read().strip()
-            if cookie:
-                # print("文件中的Cookie: 已设置")
-                return cookie
-
-        # 3. 默认Cookie（可能过期，仅作为备选）
-        return 'st_si=78948464251292; st_psi=20260205091253851-119144370567-1089607836; st_pvi=07789985376191; st_sp=2026-02-05%2009%3A11%3A13; st_inirUrl=https%3A%2F%2Fxuangu.eastmoney.com%2FResult; st_sn=12; st_asi=20260205091253851-119144370567-1089607836-webznxg.dbssk.qxg-1'
 
     def _create_session(self):
         """创建并配置会话"""
@@ -82,10 +57,6 @@ class eastmoney_fetcher:
             'Connection': 'keep-alive',
         }
         session.headers.update(headers)
-        # 设置Cookie
-        cookie = self._get_cookie()
-        if cookie:
-            session.headers.update({'Cookie': cookie})
         return session
 
     def _normalize_eastmoney_url(self, url):

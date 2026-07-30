@@ -34,13 +34,11 @@ class Application(tornado.web.Application):
             (r"/instock/", HomeHandler),
             (r"/instock/high_dividend", highDividendHandler.HighDividendPageHandler),
             (r"/instock/high_dividend/api", highDividendHandler.HighDividendDataHandler),
+            (r"/instock/high_dividend/followlist", highDividendHandler.FollowListHandler),
         ]
         settings = dict(  # 配置
             template_path=os.path.join(os.path.dirname(__file__), "templates"),
             static_path=os.path.join(os.path.dirname(__file__), "static"),
-            xsrf_cookies=False,  # True,
-            # cookie加密
-            cookie_secret="027bb1b670eddf0392cdda8709268a17b58b7",
             debug=True,
         )
         super(Application, self).__init__(handlers, **settings)

@@ -161,3 +161,4 @@ cache/
 log/
 test/
 .DS_Store
+instock/config/followlist.txt

@@ -309,8 +309,12 @@ def fetch_daily_ma120_position(code, today=None):
     }
 
 
-def fetch_20day_low_bounce(code):
-    """获取最近收盘价相对于最近20个交易日盘中最低价的反弹幅度，使用腾讯前复权价格。"""
+def fetch_20day_low_bounce(code, today=None):
+    """获取最近收盘价相对于最近20个交易日盘中最低价的反弹幅度，使用腾讯前复权价格。
+
+    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线，以
+    前一交易日收盘数据计算）。
+    """
     market = "sh" if code.startswith("6") else "sz"
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     params = {
@@ -331,6 +335,10 @@ def fetch_20day_low_bounce(code):
     klines = stock_data.get("qfqday") or stock_data.get("day")
     if not klines or len(klines) < 20:
         return None
+
+    if today is not None:
+        today_text = today.strftime("%Y-%m-%d") if hasattr(today, "strftime") else str(today)[:10]
+        klines = [item for item in klines if str(item[0])[:10] < today_text]
 
     rows = []
     for item in klines:
@@ -368,8 +376,12 @@ def fetch_20day_low_bounce(code):
     }
 
 
-def fetch_20day_high_decline(code):
-    """获取最近收盘价相对于最近20个交易日盘中最高价的回落幅度，使用腾讯前复权价格。"""
+def fetch_20day_high_decline(code, today=None):
+    """获取最近收盘价相对于最近20个交易日盘中最高价的回落幅度，使用腾讯前复权价格。
+
+    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线，以
+    前一交易日收盘数据计算）。
+    """
     market = "sh" if code.startswith("6") else "sz"
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     params = {
@@ -390,6 +402,10 @@ def fetch_20day_high_decline(code):
     klines = stock_data.get("qfqday") or stock_data.get("day")
     if not klines or len(klines) < 20:
         return None
+
+    if today is not None:
+        today_text = today.strftime("%Y-%m-%d") if hasattr(today, "strftime") else str(today)[:10]
+        klines = [item for item in klines if str(item[0])[:10] < today_text]
 
     rows = []
     for item in klines:

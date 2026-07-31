@@ -312,6 +312,14 @@ def _read_ma120_cache(db, stock_codes):
     return {row["code"]: row for row in rows}
 
 
+def _previous_trading_day(date):
+    """返回 date 之前的最近一个交易日（周一至周五），跨周末时回到周五。"""
+    prev = date - datetime.timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= datetime.timedelta(days=1)
+    return prev
+
+
 def _is_ma120_cache_stale(cache_row, now):
     phase = _market_phase(now)
     if cache_row is None:
@@ -319,9 +327,11 @@ def _is_ma120_cache_stale(cache_row, now):
     fetched_at = cache_row.get("fetched_at")
     if not fetched_at:
         return True
-    if phase == "intraday" or phase == "before_open":
-        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
-        return fetched_at < close_time - datetime.timedelta(days=1)
+    if phase in ("intraday", "before_open"):
+        # 下午3点前使用前一交易日收盘数据
+        prev_trading_day = _previous_trading_day(now.date())
+        prev_close = datetime.datetime.combine(prev_trading_day, datetime.time(15, 0))
+        return fetched_at < prev_close
     if phase == "after_close":
         close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
         return fetched_at < close_time
@@ -330,8 +340,8 @@ def _is_ma120_cache_stale(cache_row, now):
 
 def _ma120_refresh_window(now):
     phase = _market_phase(now)
-    if phase == "intraday":
-        return None
+    if phase == "before_open":
+        phase = "intraday"
     return f"{now.date()}:{phase}"
 
 
@@ -361,13 +371,16 @@ def _refresh_ma120_positions(stock_codes):
     try:
         db = mysql.Connection(**mdb.MYSQL_CONN)
         _ensure_cache_tables(db)
+        now = _now()
+        phase = _market_phase(now)
+        # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
+        effective_today = now.date() if phase in ("intraday", "before_open") else None
         for code in stock_codes:
-            now = _now()
             cache_row = _read_ma120_cache(db, [code]).get(code)
             if not _is_ma120_cache_stale(cache_row, now):
                 continue
 
-            ma120_row = stocklist.fetch_daily_ma120_position(code)
+            ma120_row = stocklist.fetch_daily_ma120_position(code, today=effective_today)
             if ma120_row is not None:
                 _write_ma120_cache(db, code, ma120_row, now)
     except Exception as error:
@@ -424,9 +437,11 @@ def _is_low20_cache_stale(cache_row, now):
     fetched_at = cache_row.get("fetched_at")
     if not fetched_at:
         return True
-    if phase == "intraday" or phase == "before_open":
-        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
-        return fetched_at < close_time - datetime.timedelta(days=1)
+    if phase in ("intraday", "before_open"):
+        # 下午3点前使用前一交易日收盘数据
+        prev_trading_day = _previous_trading_day(now.date())
+        prev_close = datetime.datetime.combine(prev_trading_day, datetime.time(15, 0))
+        return fetched_at < prev_close
     if phase == "after_close":
         close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
         return fetched_at < close_time
@@ -435,8 +450,8 @@ def _is_low20_cache_stale(cache_row, now):
 
 def _low20_refresh_window(now):
     phase = _market_phase(now)
-    if phase == "intraday":
-        return None
+    if phase == "before_open":
+        phase = "intraday"
     return f"{now.date()}:{phase}"
 
 
@@ -469,13 +484,16 @@ def _refresh_low20_positions(stock_codes):
     try:
         db = mysql.Connection(**mdb.MYSQL_CONN)
         _ensure_cache_tables(db)
+        now = _now()
+        phase = _market_phase(now)
+        # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
+        effective_today = now.date() if phase in ("intraday", "before_open") else None
         for code in stock_codes:
-            now = _now()
             cache_row = _read_low20_cache(db, [code]).get(code)
             if not _is_low20_cache_stale(cache_row, now):
                 continue
 
-            low20_row = stocklist.fetch_20day_low_bounce(code)
+            low20_row = stocklist.fetch_20day_low_bounce(code, today=effective_today)
             if low20_row is not None:
                 _write_low20_cache(db, code, low20_row, now)
     except Exception as error:
@@ -532,9 +550,11 @@ def _is_high20_cache_stale(cache_row, now):
     fetched_at = cache_row.get("fetched_at")
     if not fetched_at:
         return True
-    if phase == "intraday" or phase == "before_open":
-        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
-        return fetched_at < close_time - datetime.timedelta(days=1)
+    if phase in ("intraday", "before_open"):
+        # 下午3点前使用前一交易日收盘数据
+        prev_trading_day = _previous_trading_day(now.date())
+        prev_close = datetime.datetime.combine(prev_trading_day, datetime.time(15, 0))
+        return fetched_at < prev_close
     if phase == "after_close":
         close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
         return fetched_at < close_time
@@ -543,8 +563,8 @@ def _is_high20_cache_stale(cache_row, now):
 
 def _high20_refresh_window(now):
     phase = _market_phase(now)
-    if phase == "intraday":
-        return None
+    if phase == "before_open":
+        phase = "intraday"
     return f"{now.date()}:{phase}"
 
 
@@ -577,13 +597,16 @@ def _refresh_high20_positions(stock_codes):
     try:
         db = mysql.Connection(**mdb.MYSQL_CONN)
         _ensure_cache_tables(db)
+        now = _now()
+        phase = _market_phase(now)
+        # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
+        effective_today = now.date() if phase in ("intraday", "before_open") else None
         for code in stock_codes:
-            now = _now()
             cache_row = _read_high20_cache(db, [code]).get(code)
             if not _is_high20_cache_stale(cache_row, now):
                 continue
 
-            high20_row = stocklist.fetch_20day_high_decline(code)
+            high20_row = stocklist.fetch_20day_high_decline(code, today=effective_today)
             if high20_row is not None:
                 _write_high20_cache(db, code, high20_row, now)
     except Exception as error:
@@ -640,8 +663,10 @@ def _is_profile_cache_stale(cache_row, now):
         return True
     phase = _market_phase(now)
     if phase in ("intraday", "before_open"):
-        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
-        return fetched_at < close_time - datetime.timedelta(days=1)
+        # 下午3点前使用前一交易日收盘数据
+        prev_trading_day = _previous_trading_day(now.date())
+        prev_close = datetime.datetime.combine(prev_trading_day, datetime.time(15, 0))
+        return fetched_at < prev_close
     if phase == "after_close":
         close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
         return fetched_at < close_time
@@ -692,9 +717,6 @@ def _schedule_profile_refresh(stock_codes):
     global _PROFILE_REFRESH_RUNNING
     stock_codes = tuple(dict.fromkeys(stock_codes))
     if not stock_codes:
-        return
-    phase = _market_phase(_now())
-    if phase == "intraday":
         return
     with _PROFILE_REFRESH_LOCK:
         if _PROFILE_REFRESH_RUNNING:
@@ -1545,10 +1567,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
             "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             "cache_policy": {
                 "price": "盘中最多每30分钟刷新一次，盘后保持收盘价；外部请求间隔至少2秒",
-                "profile": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新市值与行业（每日一次）；外部请求间隔至少2秒",
-                "ma120": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的日MA120位置；外部请求间隔至少2秒",
-                "low20": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的20日最低反弹幅度；外部请求间隔至少2秒",
-                "high20": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的20日最高回落幅度；外部请求间隔至少2秒",
+                "profile": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日数据；外部请求间隔至少2秒",
+                "ma120": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据；外部请求间隔至少2秒",
+                "low20": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据；外部请求间隔至少2秒",
+                "high20": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据；外部请求间隔至少2秒",
                 "dividend_history": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
                 "finance_report": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
                 "cashflow": "页面请求只读缓存；窄口径FCF只取最新年报，金融行业不抓取；年报季交易日检查，非年报季最多7天一次；外部请求间隔至少2秒",

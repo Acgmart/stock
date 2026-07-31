@@ -32,6 +32,7 @@ FCF/股价：窄口径FCF/股价，评估赚钱能力。
 行业：申万二级行业，作为行业板块参考。
 市值：流通市值，单位亿，作为风险参考，一般来说低市值企业波动率更大。
 反弹：最近收盘价相对于最近20个交易日的最低价的涨幅，评估月内波动。
+回落：最近收盘价相对于最近20个交易日的最高价的跌幅，评估月内波动。
 派息历史（隐藏）：分红配送相关的公告变化。
 
 ## 过滤器解释
@@ -75,13 +76,6 @@ docker run -d --name InStockDbService \
 "registry-mirrors": [
     "https://docker.m.daocloud.io"
   ]
-
-## Create Database
-等待 MariaDB 启动完成后，创建数据库：
-docker exec InStockDbService mariadb -h 127.0.0.1 -u root -proot -e "CREATE DATABASE IF NOT EXISTS instockdb CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
-
-查询当前的数据库列表：
-docker exec InStockDbService mariadb -h 127.0.0.1 -u root -proot -e "SHOW DATABASES;"
 
 ## 给本地仓库脚本可执行权限
 ls -l /Volumes/Game/Git/stock/instock/bin/*.sh

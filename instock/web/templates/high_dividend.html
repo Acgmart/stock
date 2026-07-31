@@ -258,6 +258,7 @@
                     <col style="width: 112px;">
                     <col style="width: 100px;">
                     <col style="width: 82px;">
+                    <col style="width: 82px;">
                 </colgroup>
                 <thead>
                     <tr>
@@ -272,11 +273,12 @@
                         <th class="sortable-header" data-sort-key="industry_name">行业<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="market_cap">市值<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="low20_bounce">反弹<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
+                        <th class="number-cell sortable-header" data-sort-key="high20_decline">回落<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                     </tr>
                 </thead>
                 <tbody id="dividendRows">
                     <tr>
-                        <td class="empty-state" colspan="10">加载中...</td>
+                        <td class="empty-state" colspan="12">加载中...</td>
                     </tr>
                 </tbody>
             </table>
@@ -377,6 +379,9 @@
         }
         if (sortState.key === "low20_bounce") {
             return direction * (parseNullableNumber(left.low20_bounce) - parseNullableNumber(right.low20_bounce));
+        }
+        if (sortState.key === "high20_decline") {
+            return direction * (parseNullableNumber(left.high20_decline) - parseNullableNumber(right.high20_decline));
         }
 
         const leftValue = left.dividend_yield === null || left.dividend_yield === undefined ? -Infinity : Number(left.dividend_yield);
@@ -540,7 +545,7 @@
     }
 
     function tableColumnCount() {
-        return 11;
+        return 12;
     }
 
     function updateSortIcons() {
@@ -612,6 +617,11 @@
                 escapeHtml(row.low20_trade_date ? row.low20_trade_date + ' 收盘 ' + formatNumber(row.low20_close_price, 2) + ' / 近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
                 '">',
                 formatBlankPercent(row.low20_bounce, 1),
+                '</td>',
+                '<td class="number-cell" title="',
+                escapeHtml(row.high20_trade_date ? row.high20_trade_date + ' 收盘 ' + formatNumber(row.high20_close_price, 2) + ' / 近20日盘中最高 ' + formatNumber(row.high20_highest_high, 2) + '（' + row.high20_highest_date + '）' : ''),
+                '">',
+                formatBlankPercent(row.high20_decline, 1),
                 '</td>',
                 '</tr>'
             ].join('');

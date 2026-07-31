@@ -56,6 +56,8 @@ def main():
     # tornado.options.parse_command_line()
     tornado.options.options.logging = None
 
+    mdb.ensure_database_exists()
+
     http_server = tornado.httpserver.HTTPServer(Application())
     port = 9988
     http_server.listen(port)

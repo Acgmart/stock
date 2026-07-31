@@ -31,6 +31,9 @@ _MA120_REFRESH_RUNNING = False
 _MA120_REFRESH_ATTEMPTS = {}
 _LOW20_REFRESH_RUNNING = False
 _LOW20_REFRESH_ATTEMPTS = {}
+_HIGH20_REFRESH_LOCK = threading.Lock()
+_HIGH20_REFRESH_RUNNING = False
+_HIGH20_REFRESH_ATTEMPTS = {}
 _LAST_EXTERNAL_REQUEST_AT = 0.0
 _EXTERNAL_REQUEST_INTERVAL_SECONDS = 2
 _PRICE_CACHE_TABLE = "cn_high_dividend_price_cache"
@@ -39,6 +42,7 @@ _FINANCE_REPORT_CACHE_TABLE = "cn_high_dividend_finance_report_cache"
 _CASHFLOW_CACHE_TABLE = "cn_high_dividend_cashflow_cache"
 _MA120_CACHE_TABLE = "cn_high_dividend_ma120_cache"
 _LOW20_CACHE_TABLE = "cn_high_dividend_low20_cache"
+_HIGH20_CACHE_TABLE = "cn_high_dividend_high20_cache"
 _PROFILE_CACHE_TABLE = "cn_high_dividend_profile_cache"
 _FINANCE_REPORT_REFRESH_LOCK = threading.Lock()
 _CASHFLOW_REFRESH_LOCK = threading.Lock()
@@ -194,6 +198,25 @@ def _ensure_cache_tables(db):
                 INDEX `idx_fetched_at` (`fetched_at`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
+        db.execute(f"ALTER TABLE `{_LOW20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `lowest_date` date DEFAULT NULL")
+        db.execute(f"ALTER TABLE `{_LOW20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `lowest_low` decimal(12,4) DEFAULT NULL")
+        db.execute(f"ALTER TABLE `{_LOW20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `bounce_position` decimal(12,4) DEFAULT NULL")
+        db.execute(f"""
+            CREATE TABLE IF NOT EXISTS `{_HIGH20_CACHE_TABLE}` (
+                `code` varchar(6) NOT NULL,
+                `trade_date` date DEFAULT NULL,
+                `close_price` decimal(12,4) DEFAULT NULL,
+                `highest_date` date DEFAULT NULL,
+                `highest_high` decimal(12,4) DEFAULT NULL,
+                `decline_position` decimal(12,4) DEFAULT NULL,
+                `fetched_at` datetime NOT NULL,
+                PRIMARY KEY (`code`),
+                INDEX `idx_fetched_at` (`fetched_at`)
+            ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+        """)
+        db.execute(f"ALTER TABLE `{_HIGH20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `highest_date` date DEFAULT NULL")
+        db.execute(f"ALTER TABLE `{_HIGH20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `highest_high` decimal(12,4) DEFAULT NULL")
+        db.execute(f"ALTER TABLE `{_HIGH20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `decline_position` decimal(12,4) DEFAULT NULL")
         _CACHE_TABLE_READY = True
 
 
@@ -486,6 +509,114 @@ def _schedule_low20_refresh(stock_codes):
         _LOW20_REFRESH_RUNNING = True
 
     thread = threading.Thread(target=_refresh_low20_positions, args=(stock_codes,), daemon=True)
+    thread.start()
+
+
+def _read_high20_cache(db, stock_codes):
+    if not stock_codes:
+        return {}
+    placeholders = ",".join(["%s"] * len(stock_codes))
+    rows = db.query(f"""
+        SELECT `code`, `trade_date`, `close_price`, `highest_date`, `highest_high`,
+               `decline_position`, `fetched_at`
+        FROM `{_HIGH20_CACHE_TABLE}`
+        WHERE `code` IN ({placeholders})
+    """, *stock_codes)
+    return {row["code"]: row for row in rows}
+
+
+def _is_high20_cache_stale(cache_row, now):
+    phase = _market_phase(now)
+    if cache_row is None:
+        return True
+    fetched_at = cache_row.get("fetched_at")
+    if not fetched_at:
+        return True
+    if phase == "intraday" or phase == "before_open":
+        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
+        return fetched_at < close_time - datetime.timedelta(days=1)
+    if phase == "after_close":
+        close_time = datetime.datetime.combine(now.date(), datetime.time(15, 0))
+        return fetched_at < close_time
+    return fetched_at.date() < now.date()
+
+
+def _high20_refresh_window(now):
+    phase = _market_phase(now)
+    if phase == "intraday":
+        return None
+    return f"{now.date()}:{phase}"
+
+
+def _write_high20_cache(db, code, high20_row, now):
+    db.execute(f"""
+        INSERT INTO `{_HIGH20_CACHE_TABLE}`
+            (`code`, `trade_date`, `close_price`, `highest_date`, `highest_high`,
+             `decline_position`, `fetched_at`)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            `trade_date` = VALUES(`trade_date`),
+            `close_price` = VALUES(`close_price`),
+            `highest_date` = VALUES(`highest_date`),
+            `highest_high` = VALUES(`highest_high`),
+            `decline_position` = VALUES(`decline_position`),
+            `fetched_at` = VALUES(`fetched_at`)
+    """,
+               code,
+               high20_row.get("trade_date"),
+               high20_row.get("close_price"),
+               high20_row.get("highest_date"),
+               high20_row.get("highest_high"),
+               high20_row.get("decline_position"),
+               now.strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def _refresh_high20_positions(stock_codes):
+    global _HIGH20_REFRESH_RUNNING
+    db = None
+    try:
+        db = mysql.Connection(**mdb.MYSQL_CONN)
+        _ensure_cache_tables(db)
+        for code in stock_codes:
+            now = _now()
+            cache_row = _read_high20_cache(db, [code]).get(code)
+            if not _is_high20_cache_stale(cache_row, now):
+                continue
+
+            high20_row = stocklist.fetch_20day_high_decline(code)
+            if high20_row is not None:
+                _write_high20_cache(db, code, high20_row, now)
+    except Exception as error:
+        print(f"highDividendHandler._refresh_high20_positions处理异常：{error}")
+    finally:
+        if db is not None:
+            db.close()
+        with _HIGH20_REFRESH_LOCK:
+            _HIGH20_REFRESH_RUNNING = False
+
+
+def _schedule_high20_refresh(stock_codes):
+    global _HIGH20_REFRESH_RUNNING
+    stock_codes = tuple(dict.fromkeys(stock_codes))
+    if not stock_codes:
+        return
+    window = _high20_refresh_window(_now())
+    if window is None:
+        return
+    with _HIGH20_REFRESH_LOCK:
+        if _HIGH20_REFRESH_RUNNING:
+            return
+        stock_codes = tuple(
+            code for code in stock_codes
+            if _HIGH20_REFRESH_ATTEMPTS.get(code) != window
+        )
+        if not stock_codes:
+            return
+        for code in stock_codes:
+            _HIGH20_REFRESH_ATTEMPTS[code] = window
+        _HIGH20_REFRESH_RUNNING = True
+
+    thread = threading.Thread(target=_refresh_high20_positions, args=(stock_codes,), daemon=True)
     thread.start()
 
 
@@ -1272,6 +1403,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
         profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         low20_by_code = _read_low20_cache(self.db, stock_codes)
+        high20_by_code = _read_high20_cache(self.db, stock_codes)
         stale_ma120_codes = [
             code for code in stock_codes
             if _is_ma120_cache_stale(ma120_by_code.get(code), now)
@@ -1279,6 +1411,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
         stale_low20_codes = [
             code for code in stock_codes
             if _is_low20_cache_stale(low20_by_code.get(code), now)
+        ]
+        stale_high20_codes = [
+            code for code in stock_codes
+            if _is_high20_cache_stale(high20_by_code.get(code), now)
         ]
         stale_profile_codes = [
             code for code in stock_codes
@@ -1330,6 +1466,8 @@ class HighDividendDataHandler(webBase.BaseHandler):
             ma120_position = None if not ma120_row else _to_float(ma120_row.get("ma120_position"))
             low20_row = low20_by_code.get(code, {})
             low20_bounce = None if not low20_row else _to_float(low20_row.get("bounce_position"))
+            high20_row = high20_by_code.get(code, {})
+            high20_decline = None if not high20_row else _to_float(high20_row.get("decline_position"))
             narrow_fcf = annual_fcf.get("narrow_fcf")
             fcf_dividend = None
             fcf_price = None
@@ -1377,6 +1515,11 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "low20_lowest_date": "" if not low20_row else _date_text(low20_row.get("lowest_date")),
                 "low20_lowest_low": None if not low20_row else _to_float(low20_row.get("lowest_low")),
                 "low20_bounce": low20_bounce,
+                "high20_trade_date": "" if not high20_row else _date_text(high20_row.get("trade_date")),
+                "high20_close_price": None if not high20_row else _to_float(high20_row.get("close_price")),
+                "high20_highest_date": "" if not high20_row else _date_text(high20_row.get("highest_date")),
+                "high20_highest_high": None if not high20_row else _to_float(high20_row.get("highest_high")),
+                "high20_decline": high20_decline,
                 "price_date": "" if price_row is None else _date_text(price_row.get("price_date")),
                 "current_price": current_price,
                 "market_cap": None if profile_by_code.get(code) is None else _to_float(profile_by_code[code].get("market_cap")),
@@ -1391,6 +1534,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
 
         _schedule_ma120_refresh(stale_ma120_codes)
         _schedule_low20_refresh(stale_low20_codes)
+        _schedule_high20_refresh(stale_high20_codes)
         _schedule_profile_refresh(stale_profile_codes)
         _schedule_dividend_history_refresh(stale_dividend_codes)
         _schedule_finance_report_refresh(stale_finance_codes)
@@ -1404,6 +1548,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "profile": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新市值与行业（每日一次）；外部请求间隔至少2秒",
                 "ma120": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的日MA120位置；外部请求间隔至少2秒",
                 "low20": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的20日最低反弹幅度；外部请求间隔至少2秒",
+                "high20": "页面请求只读缓存；盘中不刷新，收盘后或次日首次打开时后台刷新前一完整交易日收盘价对应的20日最高回落幅度；外部请求间隔至少2秒",
                 "dividend_history": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
                 "finance_report": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
                 "cashflow": "页面请求只读缓存；窄口径FCF只取最新年报，金融行业不抓取；年报季交易日检查，非年报季最多7天一次；外部请求间隔至少2秒",

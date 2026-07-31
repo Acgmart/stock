@@ -266,10 +266,10 @@
                         <th class="sortable-header" data-sort-key="name">名称<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="deducted_profit_growth">扣非<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="dividend_yield">股息率<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell">息增年<span class="column-resizer"></span></th>
-                        <th class="number-cell">FCF/股息<span class="column-resizer"></span></th>
+                        <th class="number-cell sortable-header" data-sort-key="dividend_growth_years">息增年<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
+                        <th class="number-cell sortable-header" data-sort-key="fcf_dividend">FCF/股息<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="fcf_price">FCF/股价<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
-                        <th class="number-cell sortable-header" data-sort-key="ma120_position">日MA120<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
+                        <th class="number-cell sortable-header" data-sort-key="ma120_position">MA120<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="sortable-header" data-sort-key="industry_name">行业<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="market_cap">市值<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
                         <th class="number-cell sortable-header" data-sort-key="low20_bounce">反弹<i class="fa fa-sort sort-icon"></i><span class="column-resizer"></span></th>
@@ -372,6 +372,12 @@
         if (sortState.key === "fcf_price") {
             return direction * (parseNullableNumber(left.fcf_price) - parseNullableNumber(right.fcf_price));
         }
+        if (sortState.key === "fcf_dividend") {
+            return direction * (parseNullableNumber(left.fcf_dividend) - parseNullableNumber(right.fcf_dividend));
+        }
+        if (sortState.key === "dividend_growth_years") {
+            return direction * (parseNullableNumber(left.dividend_growth_years) - parseNullableNumber(right.dividend_growth_years));
+        }
         if (sortState.key === "ma120_position") {
             return direction * (parseNullableNumber(left.ma120_position) - parseNullableNumber(right.ma120_position));
         }
@@ -395,6 +401,26 @@
             return -Infinity;
         }
         return Number(value);
+    }
+
+    function enrichRows(rows) {
+        return (rows || []).map(function(row) {
+            if (row.current_price != null && row.current_price > 0) {
+                if (row.ma120 != null && row.ma120 > 0) {
+                    row.ma120_position = (row.current_price / row.ma120 - 1) * 100;
+                    row.ma120_close_price = row.current_price;
+                }
+                if (row.low20_lowest_low != null && row.low20_lowest_low > 0) {
+                    row.low20_bounce = (row.current_price / row.low20_lowest_low - 1) * 100;
+                    row.low20_close_price = row.current_price;
+                }
+                if (row.high20_highest_high != null && row.high20_highest_high > 0) {
+                    row.high20_decline = (row.current_price / row.high20_highest_high - 1) * 100;
+                    row.high20_close_price = row.current_price;
+                }
+            }
+            return row;
+        });
     }
 
     function loadWatchList() {
@@ -604,13 +630,13 @@
                 formatNumber(row.dividend_growth_years, 0),
                 '</td>',
                 '<td class="number-cell fcf-dividend-cell">',
-                formatBlankPercent(row.fcf_dividend === null || row.fcf_dividend === undefined ? null : row.fcf_dividend * 100, 1),
+                formatBlankPercent(row.fcf_dividend === null || row.fcf_dividend === undefined ? null : row.fcf_dividend * 100, 0),
                 '</td>',
                 '<td class="number-cell fcf-price-cell">',
                 formatBlankPercent(row.fcf_price, 1),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml(row.ma120_trade_date ? row.ma120_trade_date + ' 收盘 ' + formatNumber(row.ma120_close_price, 2) + ' / MA120 ' + formatNumber(row.ma120, 2) : ''),
+                escapeHtml(row.ma120_trade_date ? row.ma120_trade_date + ' 现价 ' + formatNumber(row.ma120_close_price, 2) + ' / MA120 ' + formatNumber(row.ma120, 2) : ''),
                 '">',
                 formatBlankPercent(row.ma120_position, 1),
                 '</td>',
@@ -621,12 +647,12 @@
                 formatOptionalNumber(row.market_cap, 0),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml(row.low20_trade_date ? row.low20_trade_date + ' 收盘 ' + formatNumber(row.low20_close_price, 2) + ' / 近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
+                escapeHtml(row.low20_trade_date ? row.low20_trade_date + ' 现价 ' + formatNumber(row.low20_close_price, 2) + ' / 近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
                 '">',
                 formatBlankPercent(row.low20_bounce, 1),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml(row.high20_trade_date ? row.high20_trade_date + ' 收盘 ' + formatNumber(row.high20_close_price, 2) + ' / 近20日盘中最高 ' + formatNumber(row.high20_highest_high, 2) + '（' + row.high20_highest_date + '）' : ''),
+                escapeHtml(row.high20_trade_date ? row.high20_trade_date + ' 现价 ' + formatNumber(row.high20_close_price, 2) + ' / 近20日盘中最高 ' + formatNumber(row.high20_highest_high, 2) + '（' + row.high20_highest_date + '）' : ''),
                 '">',
                 formatBlankPercent(row.high20_decline, 1),
                 '</td>',
@@ -642,7 +668,7 @@
 
         $.getJSON("/instock/high_dividend/api")
             .done(function(payload) {
-                highDividendRows = payload.data || [];
+                highDividendRows = enrichRows(payload.data || []);
                 renderRows(highDividendRows);
                 if (payload.errors && payload.errors.length > 0) {
                     console.warn(payload.errors.join("\\n"));

@@ -248,12 +248,13 @@ def make_selected_stock_rows(date):
     return rows or None
 
 
-def fetch_daily_ma120_position(code, today=None):
+def fetch_daily_ma120_position(code, today=None, current_price=None):
     """获取日K线MA120位置，使用腾讯前复权价格。
 
     腾讯K线API返回前复权（qfq）日线数据，
     确保MA120计算时历史价格已就除权除息进行调整，
     与主流股票APP的MA120数值一致。
+    current_price 若传入正数，则优先用作当前价格计算 MA120 位置（盘中实时价格）。
     """
     market = "sh" if code.startswith("6") else "sz"
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
@@ -301,19 +302,22 @@ def fetch_daily_ma120_position(code, today=None):
     if ma120 <= 0:
         return None
 
+    # 优先使用实时价格计算 MA120 位置
+    effective_close = current_price if current_price is not None and current_price > 0 else close_price
+
     return {
         "trade_date": trade_date,
-        "close_price": close_price,
+        "close_price": effective_close,
         "ma120": ma120,
-        "ma120_position": (close_price / ma120 - 1) * 100,
+        "ma120_position": (effective_close / ma120 - 1) * 100,
     }
 
 
-def fetch_20day_low_bounce(code, today=None):
+def fetch_20day_low_bounce(code, today=None, current_price=None):
     """获取最近收盘价相对于最近20个交易日盘中最低价的反弹幅度，使用腾讯前复权价格。
 
-    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线，以
-    前一交易日收盘数据计算）。
+    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线）。
+    current_price 若传入正数，则优先用作当前价格计算反弹幅度（盘中实时价格）。
     """
     market = "sh" if code.startswith("6") else "sz"
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
@@ -367,20 +371,23 @@ def fetch_20day_low_bounce(code, today=None):
     if lowest_low <= 0:
         return None
 
+    # 优先使用实时价格计算反弹幅度
+    effective_close = current_price if current_price is not None and current_price > 0 else current_close
+
     return {
         "trade_date": current_trade_date,
-        "close_price": current_close,
+        "close_price": effective_close,
         "lowest_date": lowest_trade_date,
         "lowest_low": lowest_low,
-        "bounce_position": (current_close / lowest_low - 1) * 100,
+        "bounce_position": (effective_close / lowest_low - 1) * 100,
     }
 
 
-def fetch_20day_high_decline(code, today=None):
+def fetch_20day_high_decline(code, today=None, current_price=None):
     """获取最近收盘价相对于最近20个交易日盘中最高价的回落幅度，使用腾讯前复权价格。
 
-    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线，以
-    前一交易日收盘数据计算）。
+    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线）。
+    current_price 若传入正数，则优先用作当前价格计算回落幅度（盘中实时价格）。
     """
     market = "sh" if code.startswith("6") else "sz"
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
@@ -434,12 +441,15 @@ def fetch_20day_high_decline(code, today=None):
     if highest_high <= 0:
         return None
 
+    # 优先使用实时价格计算回落幅度
+    effective_close = current_price if current_price is not None and current_price > 0 else current_close
+
     return {
         "trade_date": current_trade_date,
-        "close_price": current_close,
+        "close_price": effective_close,
         "highest_date": highest_trade_date,
         "highest_high": highest_high,
-        "decline_position": (current_close / highest_high - 1) * 100,
+        "decline_position": (effective_close / highest_high - 1) * 100,
     }
 
 

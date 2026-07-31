@@ -286,6 +286,60 @@ def _write_price_cache(db, price_data, now):
                    phase)
 
 
+def _sync_indicator_cache_for_prices(db, stock_codes, now):
+    """用最新股价同步更新 MA120/反弹/回落缓存中的 close_price 和百分比值。"""
+    price_rows = _read_price_cache(db, stock_codes)
+    price_by_code = {row["code"]: _to_float(row.get("current_price")) for row in price_rows}
+
+    # MA120
+    ma120_rows = _read_ma120_cache(db, stock_codes)
+    for code, row in ma120_rows.items():
+        current_price = price_by_code.get(code)
+        if current_price is None or current_price <= 0:
+            continue
+        ma120 = _to_float(row.get("ma120"))
+        if ma120 is None or ma120 <= 0:
+            continue
+        new_ma120_pos = (current_price / ma120 - 1) * 100
+        db.execute(f"""
+            UPDATE `{_MA120_CACHE_TABLE}`
+            SET `close_price` = %s, `ma120_position` = %s, `fetched_at` = %s
+            WHERE `code` = %s
+        """, current_price, new_ma120_pos, now.strftime("%Y-%m-%d %H:%M:%S"), code)
+
+    # 反弹
+    low20_rows = _read_low20_cache(db, stock_codes)
+    for code, row in low20_rows.items():
+        current_price = price_by_code.get(code)
+        if current_price is None or current_price <= 0:
+            continue
+        lowest_low = _to_float(row.get("lowest_low"))
+        if lowest_low is None or lowest_low <= 0:
+            continue
+        new_bounce = (current_price / lowest_low - 1) * 100
+        db.execute(f"""
+            UPDATE `{_LOW20_CACHE_TABLE}`
+            SET `close_price` = %s, `bounce_position` = %s, `fetched_at` = %s
+            WHERE `code` = %s
+        """, current_price, new_bounce, now.strftime("%Y-%m-%d %H:%M:%S"), code)
+
+    # 回落
+    high20_rows = _read_high20_cache(db, stock_codes)
+    for code, row in high20_rows.items():
+        current_price = price_by_code.get(code)
+        if current_price is None or current_price <= 0:
+            continue
+        highest_high = _to_float(row.get("highest_high"))
+        if highest_high is None or highest_high <= 0:
+            continue
+        new_decline = (current_price / highest_high - 1) * 100
+        db.execute(f"""
+            UPDATE `{_HIGH20_CACHE_TABLE}`
+            SET `close_price` = %s, `decline_position` = %s, `fetched_at` = %s
+            WHERE `code` = %s
+        """, current_price, new_decline, now.strftime("%Y-%m-%d %H:%M:%S"), code)
+
+
 def _get_cached_price_rows(db, stock_codes, errors):
     now = _now()
     cached_rows = _read_price_cache(db, stock_codes)
@@ -295,6 +349,11 @@ def _get_cached_price_rows(db, stock_codes, errors):
             if price_data is not None:
                 _write_price_cache(db, price_data, now)
                 cached_rows = _read_price_cache(db, stock_codes)
+                # 同步更新 MA120/反弹/回落缓存
+                try:
+                    _sync_indicator_cache_for_prices(db, stock_codes, now)
+                except Exception:
+                    pass
         except Exception as error:
             errors.append(f"行情缓存刷新失败，已使用旧缓存：{error}")
     return {row["code"]: row for row in cached_rows}
@@ -375,12 +434,17 @@ def _refresh_ma120_positions(stock_codes):
         phase = _market_phase(now)
         # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
         effective_today = now.date() if phase in ("intraday", "before_open") else None
+        # 读取实时价格，优先用于 MA120 位置计算
+        price_rows = _read_price_cache(db, stock_codes)
+        price_by_code = {row["code"]: row for row in price_rows}
         for code in stock_codes:
             cache_row = _read_ma120_cache(db, [code]).get(code)
             if not _is_ma120_cache_stale(cache_row, now):
                 continue
 
-            ma120_row = stocklist.fetch_daily_ma120_position(code, today=effective_today)
+            price_row = price_by_code.get(code)
+            current_price = _to_float(price_row.get("current_price")) if price_row else None
+            ma120_row = stocklist.fetch_daily_ma120_position(code, today=effective_today, current_price=current_price)
             if ma120_row is not None:
                 _write_ma120_cache(db, code, ma120_row, now)
     except Exception as error:
@@ -488,12 +552,17 @@ def _refresh_low20_positions(stock_codes):
         phase = _market_phase(now)
         # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
         effective_today = now.date() if phase in ("intraday", "before_open") else None
+        # 读取实时价格，优先用于反弹幅度计算
+        price_rows = _read_price_cache(db, stock_codes)
+        price_by_code = {row["code"]: row for row in price_rows}
         for code in stock_codes:
             cache_row = _read_low20_cache(db, [code]).get(code)
             if not _is_low20_cache_stale(cache_row, now):
                 continue
 
-            low20_row = stocklist.fetch_20day_low_bounce(code, today=effective_today)
+            price_row = price_by_code.get(code)
+            current_price = _to_float(price_row.get("current_price")) if price_row else None
+            low20_row = stocklist.fetch_20day_low_bounce(code, today=effective_today, current_price=current_price)
             if low20_row is not None:
                 _write_low20_cache(db, code, low20_row, now)
     except Exception as error:
@@ -601,12 +670,17 @@ def _refresh_high20_positions(stock_codes):
         phase = _market_phase(now)
         # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
         effective_today = now.date() if phase in ("intraday", "before_open") else None
+        # 读取实时价格，优先用于回落幅度计算
+        price_rows = _read_price_cache(db, stock_codes)
+        price_by_code = {row["code"]: row for row in price_rows}
         for code in stock_codes:
             cache_row = _read_high20_cache(db, [code]).get(code)
             if not _is_high20_cache_stale(cache_row, now):
                 continue
 
-            high20_row = stocklist.fetch_20day_high_decline(code, today=effective_today)
+            price_row = price_by_code.get(code)
+            current_price = _to_float(price_row.get("current_price")) if price_row else None
+            high20_row = stocklist.fetch_20day_high_decline(code, today=effective_today, current_price=current_price)
             if high20_row is not None:
                 _write_high20_cache(db, code, high20_row, now)
     except Exception as error:

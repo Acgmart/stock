@@ -293,6 +293,7 @@
         direction: "asc"
     };
     const FILTER_STORAGE_KEY = "highDividendNegativeEpsFilterEnabled";
+    const WATCH_FILTER_STORAGE_KEY = "highDividendWatchFilterEnabled";
     const MIN_DIVIDEND_YIELD_STORAGE_KEY = "highDividendMinDividendYield";
     const MIN_MARKET_CAP_STORAGE_KEY = "highDividendMinMarketCap";
     const SORT_STORAGE_KEY = "highDividendSortState";
@@ -508,6 +509,11 @@
             document.getElementById("negativeEpsFilter").checked = savedValue === "true";
         }
 
+        const savedWatch = window.localStorage.getItem(WATCH_FILTER_STORAGE_KEY);
+        if (savedWatch !== null) {
+            document.getElementById("watchFilter").checked = savedWatch === "true";
+        }
+
         const savedMinDividendYield = window.localStorage.getItem(MIN_DIVIDEND_YIELD_STORAGE_KEY);
         if (savedMinDividendYield !== null) {
             document.getElementById("minDividendYieldFilter").value = savedMinDividendYield;
@@ -521,6 +527,7 @@
 
     function saveFilterState() {
         window.localStorage.setItem(FILTER_STORAGE_KEY, String(isFilterEnabled()));
+        window.localStorage.setItem(WATCH_FILTER_STORAGE_KEY, String(isWatchFilterEnabled()));
         window.localStorage.setItem(MIN_DIVIDEND_YIELD_STORAGE_KEY, document.getElementById("minDividendYieldFilter").value);
         window.localStorage.setItem(MIN_MARKET_CAP_STORAGE_KEY, document.getElementById("minMarketCapFilter").value);
     }
@@ -729,6 +736,7 @@
             renderRows(highDividendRows);
         });
         $("#watchFilter").on("change", function() {
+            saveFilterState();
             renderRows(highDividendRows);
         });
         $("#dividendRows").on("click", "td.name-cell", function() {

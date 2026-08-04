@@ -118,6 +118,7 @@ def _ensure_cache_tables(db):
                 INDEX `idx_fetched_at` (`fetched_at`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
+        db.execute(f"ALTER TABLE `{_PRICE_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `pre_close_price` decimal(12,4) DEFAULT NULL")
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_PROFILE_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
@@ -255,7 +256,7 @@ def _read_price_cache(db, stock_codes):
         return []
     placeholders = ",".join(["%s"] * len(stock_codes))
     return db.query(f"""
-        SELECT `code`, `name`, `price_date`, `current_price`, `fetched_at`, `market_phase`
+        SELECT `code`, `name`, `price_date`, `current_price`, `pre_close_price`, `fetched_at`, `market_phase`
         FROM `{_PRICE_CACHE_TABLE}`
         WHERE `code` IN ({placeholders})
     """, *stock_codes)
@@ -265,16 +266,18 @@ def _write_price_cache(db, price_data, now):
     phase = _market_phase(now)
     for row in price_data:
         current_price = _to_float(row.get("new_price"))
+        pre_close_price = _to_float(row.get("pre_close_price"))
         if current_price is None or current_price <= 0:
-            current_price = _to_float(row.get("pre_close_price"))
+            current_price = pre_close_price
         db.execute(f"""
             INSERT INTO `{_PRICE_CACHE_TABLE}`
-                (`code`, `name`, `price_date`, `current_price`, `fetched_at`, `market_phase`)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (`code`, `name`, `price_date`, `current_price`, `pre_close_price`, `fetched_at`, `market_phase`)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 `name` = VALUES(`name`),
                 `price_date` = VALUES(`price_date`),
                 `current_price` = VALUES(`current_price`),
+                `pre_close_price` = VALUES(`pre_close_price`),
                 `fetched_at` = VALUES(`fetched_at`),
                 `market_phase` = VALUES(`market_phase`)
         """,
@@ -282,6 +285,7 @@ def _write_price_cache(db, price_data, now):
                    row.get("name"),
                    row.get("date"),
                    current_price,
+                   pre_close_price,
                    now.strftime("%Y-%m-%d %H:%M:%S"),
                    phase)
 
@@ -377,6 +381,35 @@ def _previous_trading_day(date):
     while prev.weekday() >= 5:
         prev -= datetime.timedelta(days=1)
     return prev
+
+
+_MA120_STAGE_PERCENT = 10
+
+
+def _ma120_stage(position):
+    """MA120 相对位置所处阶段序号，每 10% 为一个阶段（向下取整）。"""
+    return int(position // _MA120_STAGE_PERCENT)
+
+
+def _ma120_trade_signal(current_price, pre_close_price, ma120_position, ma120):
+    """判断 MA120 位置的买卖点信号。
+
+    以 MA120 相对位置每 10% 为一个阶段，股价跨越阶段边界时触发提示：
+    买点：股价相对昨日收盘价下跌、最新位置位于 0% 以下，且从更高阶段跨入更低阶段。
+    卖点：股价相对昨日收盘价上涨、最新位置位于 0% 以上，且从更低阶段跨入更高阶段。
+    返回 "buy"、"sell" 或空字符串。
+    """
+    if current_price is None or pre_close_price is None or pre_close_price <= 0:
+        return ""
+    if ma120_position is None or ma120 is None or ma120 <= 0:
+        return ""
+    prev_position = (pre_close_price / ma120 - 1) * 100
+    stage_diff = _ma120_stage(prev_position) - _ma120_stage(ma120_position)
+    if current_price < pre_close_price and ma120_position < 0 and stage_diff > 0:
+        return "buy"
+    if current_price > pre_close_price and ma120_position > 0 and stage_diff < 0:
+        return "sell"
+    return ""
 
 
 def _is_ma120_cache_stale(cache_row, now):
@@ -1436,7 +1469,12 @@ def _sum_fiscal_year_dividend(history, year):
 
 
 def _latest_dividend_year(history):
-    annual_years = []
+    """返回有派息的最近一个已完结财年。
+
+    只认 -12-31 年报记录会把「只有年中派息、没有年报派息」的年度漏掉
+    （如某年公司不分红或只做中期分红），从而错误回退到更早的年度；
+    但当年（进行中）的中期派息也不算最新年度，否则会把未完的当年误当完整年度。
+    """
     years = []
     for item in history:
         report_date = _date_text(item.get("REPORT_DATE"))
@@ -1445,16 +1483,15 @@ def _latest_dividend_year(history):
         cash_per_10 = _to_float(item.get("PRETAX_BONUS_RMB"))
         if cash_per_10 is None or cash_per_10 <= 0:
             continue
-        year = int(report_date[:4])
-        years.append(year)
-        if report_date.endswith("-12-31"):
-            annual_years.append(year)
-    if annual_years:
-        return max(annual_years)
+        years.append(int(report_date[:4]))
+
+    current_year = _now().year
+    completed_years = [year for year in years if year < current_year]
+    if completed_years:
+        return max(completed_years)
     if years:
         return max(years)
-    else:
-        return _now().year - 1
+    return current_year - 1
 
 
 def _consecutive_non_decline_years(history, year):
@@ -1497,6 +1534,14 @@ class HighDividendDataHandler(webBase.BaseHandler):
 
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
         profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
+        # 屏蔽 blocklist_industry.txt 中指定的申万二级行业，被屏蔽的股票不再读取缓存、不再刷新
+        blocked_industries = stocklist.get_blocked_industries()
+        if blocked_industries:
+            stock_codes = [
+                code for code in stock_codes
+                if profile_by_code.get(code) is None
+                or (profile_by_code[code].get("industry_name") or "") not in blocked_industries
+            ]
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         low20_by_code = _read_low20_cache(self.db, stock_codes)
         high20_by_code = _read_high20_cache(self.db, stock_codes)
@@ -1523,6 +1568,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
         for code in stock_codes:
             price_row = price_by_code.get(code)
             current_price = None if price_row is None else _to_float(price_row.get("current_price"))
+            pre_close_price = None if price_row is None else _to_float(price_row.get("pre_close_price"))
             try:
                 history, dividend_changed, dividend_history_stale = _get_cached_dividend_history(self.db, code)
                 if dividend_history_stale:
@@ -1606,6 +1652,11 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "ma120_close_price": None if not ma120_row else _to_float(ma120_row.get("close_price")),
                 "ma120": None if not ma120_row else _to_float(ma120_row.get("ma120")),
                 "ma120_position": ma120_position,
+                "ma120_signal": _ma120_trade_signal(
+                    current_price,
+                    pre_close_price,
+                    ma120_position,
+                    None if not ma120_row else _to_float(ma120_row.get("ma120"))),
                 "low20_trade_date": "" if not low20_row else _date_text(low20_row.get("trade_date")),
                 "low20_close_price": None if not low20_row else _to_float(low20_row.get("close_price")),
                 "low20_lowest_date": "" if not low20_row else _date_text(low20_row.get("lowest_date")),

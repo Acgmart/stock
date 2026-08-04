@@ -88,6 +88,32 @@ def get_stock_codes():
     return DEFAULT_STOCK_CODES
 
 
+def _blocklist_candidate_paths():
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    return (
+        os.environ.get("INSTOCK_BLOCKLIST_PATH"),
+        os.environ.get("BLOCKLIST_PATH"),
+        os.path.join(base_dir, "config", "blocklist_industry.txt"),
+    )
+
+
+def get_blocked_industries():
+    """从 blocklist_industry.txt 读取需要屏蔽的申万二级行业列表。"""
+    blocked = set()
+    for path in _blocklist_candidate_paths():
+        if not path or not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8") as file:
+            for line in file:
+                line = line.split("#", 1)[0].split("//", 1)[0].strip()
+                if not line:
+                    continue
+                blocked.add(line)
+        if blocked:
+            return blocked
+    return blocked
+
+
 def is_a_stock_code(code):
     return str(code).startswith(('600', '601', '603', '605', '000', '001', '002', '003', '300', '301'))
 

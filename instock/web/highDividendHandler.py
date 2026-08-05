@@ -14,6 +14,7 @@ import instock.lib.mysql as mysql
 from instock.core.eastmoney_fetcher import eastmoney_fetcher
 import instock.core.stocklist as stocklist
 import instock.core.followlist as followlist
+import instock.core.blocklist as blocklist
 import instock.web.base as webBase
 
 __author__ = 'myh '
@@ -1542,6 +1543,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 if profile_by_code.get(code) is None
                 or (profile_by_code[code].get("industry_name") or "") not in blocked_industries
             ]
+        # 屏蔽 blocklist_dividendGrowthYearZero.txt 中记录的息增年为0的股票，被屏蔽的股票不再读取缓存、不再刷新
+        blocked_zero_growth_codes = set(blocklist.get_blocked_codes())
+        if blocked_zero_growth_codes:
+            stock_codes = [code for code in stock_codes if code not in blocked_zero_growth_codes]
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         low20_by_code = _read_low20_cache(self.db, stock_codes)
         high20_by_code = _read_high20_cache(self.db, stock_codes)
@@ -1564,6 +1569,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
         stale_dividend_codes = []
         stale_finance_codes = []
         stale_cashflow_codes = []
+        blocked_this_run_codes = set()
 
         for code in stock_codes:
             price_row = price_by_code.get(code)
@@ -1576,6 +1582,11 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 dividend_year = _latest_dividend_year(history)
                 dividend_per_10, details = _sum_fiscal_year_dividend(history, dividend_year)
                 dividend_growth_years = _consecutive_non_decline_years(history, dividend_year)
+                if dividend_growth_years == 0 and history:
+                    # 息增年为0：自动记录到 blocklist_dividendGrowthYearZero.txt 并屏蔽，不再读取缓存、不再刷新
+                    blocklist.add_blocked(code, stock_names.get(code, ""))
+                    blocked_this_run_codes.add(code)
+                    continue
             except Exception as error:
                 dividend_year = now.year - 1
                 dividend_per_10 = 0.0
@@ -1678,6 +1689,14 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "dividend_changed": dividend_changed,
                 "details": details,
             })
+
+        # 本次新屏蔽的股票不再安排任何缓存刷新
+        if blocked_this_run_codes:
+            for stale_list in (
+                stale_ma120_codes, stale_low20_codes, stale_high20_codes,
+                stale_profile_codes, stale_dividend_codes,
+            ):
+                stale_list[:] = [code for code in stale_list if code not in blocked_this_run_codes]
 
         _schedule_ma120_refresh(stale_ma120_codes)
         _schedule_low20_refresh(stale_low20_codes)

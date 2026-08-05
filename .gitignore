@@ -162,3 +162,4 @@ log/
 test/
 .DS_Store
 instock/config/followlist.txt
+instock/config/blocklist_dividendGrowthYearZero.txt

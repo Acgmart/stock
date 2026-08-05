@@ -12,7 +12,7 @@
 instock/config/stocklist.txt
 每行一个股票代码，可带名称：
 600900 长江电力
-已经配置了300多只股息率大于3%的股票，每年5月1日更新。
+包含沪深主板全部约3200只股票。
 
 instock/config/followlist.txt
 点击股票名称可添加关注，没有followlist.txt时自动创建。
@@ -20,6 +20,9 @@ instock/config/followlist.txt
 instock/config/blocklist_industry.txt
 每行一个需要屏蔽的申万二级行业，一般是不能出口的下行行业。
 对于银行业，可以直接用银行ETF易方达。
+
+instock/config/blocklist_dividendGrowthYearZero.txt
+息增年为0的股票自动记录到此文件并屏蔽。
 
 ## 参数解释
 名称：派息时显示为绿色，财报时显示为红色，点击股票名可添加/删除关注。
@@ -30,7 +33,7 @@ instock/config/blocklist_industry.txt
 股价（隐藏）：盘中实时价格或收盘价。
 股息率：上一个财年的派息/当前股价，作为股东回报参考。
   最低3%股息率，低于3%的股票不在考虑范围内。
-息增年：派息持续增加的年份，默认0年即上一个财年的派息额小于上上年。
+息增年：派息持续增加的年份，0年即上一个财年的派息额小于上上年。
 FCF（隐藏）：窄口径自由现金流。
 FCF/股息：窄口径FCF/股息，评估自由现金流对股息的覆盖率。
 FCF/股价：窄口径FCF/股价，评估赚钱能力。

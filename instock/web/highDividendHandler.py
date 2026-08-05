@@ -91,18 +91,18 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     blocked_industry_stock_codes.add(code)
             if blocked_industry_stock_codes:
                 stock_codes = [code for code in stock_codes if code not in blocked_industry_stock_codes]
-        # 屏蔽 blocklist_dividendGrowthYearZero.txt 中记录的息增年为0的股票，被屏蔽的股票不再读取缓存、不再刷新
-        blocked_zero_growth_codes = set(blocklist.get_blocked_codes(blocklist.GROWTH_YEAR_ZERO_FILE))
-        if blocked_zero_growth_codes:
-            stock_codes = [code for code in stock_codes if code not in blocked_zero_growth_codes]
-        # 屏蔽 blocklist_dividendYieldBelowOne.txt 中记录的股息率低于1%的股票，被屏蔽的股票不再读取缓存、不再刷新
-        blocked_yield_below_one_codes = set(blocklist.get_blocked_codes(blocklist.YIELD_BELOW_ONE_FILE))
-        if blocked_yield_below_one_codes:
-            stock_codes = [code for code in stock_codes if code not in blocked_yield_below_one_codes]
         # 屏蔽 blocklist_negativeEps.txt 中记录的收益（上年年报稀释每股收益）为负的股票，被屏蔽的股票不再读取缓存、不再刷新
         blocked_negative_eps_codes = set(blocklist.get_blocked_codes(blocklist.NEGATIVE_EPS_FILE))
         if blocked_negative_eps_codes:
             stock_codes = [code for code in stock_codes if code not in blocked_negative_eps_codes]
+        # 屏蔽 blocklist_dividendYieldBelowOne.txt 中记录的股息率低于1%的股票，被屏蔽的股票不再读取缓存、不再刷新
+        blocked_yield_below_one_codes = set(blocklist.get_blocked_codes(blocklist.YIELD_BELOW_ONE_FILE))
+        if blocked_yield_below_one_codes:
+            stock_codes = [code for code in stock_codes if code not in blocked_yield_below_one_codes]
+        # 屏蔽 blocklist_dividendGrowthYearZero.txt 中记录的息增年为0的股票，被屏蔽的股票不再读取缓存、不再刷新
+        blocked_zero_growth_codes = set(blocklist.get_blocked_codes(blocklist.GROWTH_YEAR_ZERO_FILE))
+        if blocked_zero_growth_codes:
+            stock_codes = [code for code in stock_codes if code not in blocked_zero_growth_codes]
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         low20_by_code = _read_low20_cache(self.db, stock_codes)
         high20_by_code = _read_high20_cache(self.db, stock_codes)
@@ -142,18 +142,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 dividend_yield = None
                 if current_price and current_price > 0:
                     dividend_yield = dividend_per_share / current_price * 100
-                # 优先屏蔽：息增年为0（只需派息历史）
-                if dividend_growth_years == 0 and history:
-                    # 息增年为0：自动记录到 blocklist_dividendGrowthYearZero.txt 并屏蔽，不再读取缓存、不再刷新
-                    blocklist.add_blocked(blocklist.GROWTH_YEAR_ZERO_FILE, code, stock_names.get(code, ""))
-                    blocked_this_run_codes.add(code)
-                    continue
-                # 优先屏蔽：股息率低于1%（只需派息历史与价格，无需财报/现金流）
-                if dividend_yield is not None and dividend_yield < 1 and history:
-                    # 股息率低于1%：自动记录到 blocklist_dividendYieldBelowOne.txt 并屏蔽，不再读取缓存、不再刷新
-                    blocklist.add_blocked(blocklist.YIELD_BELOW_ONE_FILE, code, stock_names.get(code, ""))
-                    blocked_this_run_codes.add(code)
-                    continue
             except Exception as error:
                 dividend_year = now.year - 1
                 dividend_per_10 = 0.0
@@ -172,9 +160,20 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 finance_report = {}
                 errors.append(f"{code} 财报数据读取失败：{error}")
 
+            # 屏蔽优先级：行业（请求开始已处理）→ 收益 → 股息率 → 息增年
             # 收益（上年年报稀释每股收益）为负：自动记录到 blocklist_negativeEps.txt 并屏蔽，不再读取缓存、不再刷新
             if finance_report.get("diluted_eps") is not None and finance_report.get("diluted_eps") < 0:
                 blocklist.add_blocked(blocklist.NEGATIVE_EPS_FILE, code, stock_names.get(code, ""))
+                blocked_this_run_codes.add(code)
+                continue
+            # 股息率低于1%（只需派息历史与价格）：自动记录到 blocklist_dividendYieldBelowOne.txt 并屏蔽，不再读取缓存、不再刷新
+            if dividend_yield is not None and dividend_yield < 1 and history:
+                blocklist.add_blocked(blocklist.YIELD_BELOW_ONE_FILE, code, stock_names.get(code, ""))
+                blocked_this_run_codes.add(code)
+                continue
+            # 息增年为0（只需派息历史）：自动记录到 blocklist_dividendGrowthYearZero.txt 并屏蔽，不再读取缓存、不再刷新
+            if dividend_growth_years == 0 and history:
+                blocklist.add_blocked(blocklist.GROWTH_YEAR_ZERO_FILE, code, stock_names.get(code, ""))
                 blocked_this_run_codes.add(code)
                 continue
 
@@ -269,12 +268,12 @@ class HighDividendDataHandler(webBase.BaseHandler):
             ):
                 stale_list[:] = [code for code in stale_list if code not in blocked_this_run_codes]
 
-        # 优先请求屏蔽文件相关数据（派息历史→息增年/股息率、财报→收益、行业），尽快完成屏蔽
+        # 优先请求屏蔽文件相关数据（行业→收益→股息率/息增年），尽快完成屏蔽
         # 其余数据（现金流、MA120、20日高低点）等屏蔽相关数据完成后才请求，屏蔽的股票不再请求
         priority_threads = [t for t in (
-            _schedule_dividend_history_refresh(stale_dividend_codes),
-            _schedule_finance_report_refresh(stale_finance_codes),
             _schedule_profile_refresh(stale_profile_codes),
+            _schedule_finance_report_refresh(stale_finance_codes),
+            _schedule_dividend_history_refresh(stale_dividend_codes),
         ) if t]
 
         def _schedule_tail_refreshes():

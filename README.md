@@ -19,21 +19,19 @@ instock/config/followlist.txt
 点击股票名称可添加关注，没有followlist.txt时自动创建。
 
 instock/config/blocklist_industry.txt
-每行一个需要屏蔽的申万二级行业，一般是不能出口的下行行业。
-对于银行业，可以直接用银行ETF易方达。
-
 instock/config/blocklist_industryStocks.txt
+每行一个需要屏蔽的申万二级行业，一般是不能出口的下行行业。
+对于银行业，建议直接参考银行ETF易方达。
 屏蔽行业对应的股票缓存，避免重复判断行业。
 如需解除屏蔽，可手动编辑blocklist_industry.txt后删除股票缓存。
 
-instock/config/blocklist_dividendGrowthYearZero.txt
-息增年为0的股票自动记录到此文件并屏蔽。
-
-instock/config/blocklist_dividendYieldBelowOne.txt
-股息率低于1%的股票自动记录到此文件并屏蔽。
-
 instock/config/blocklist_negativeEps.txt
 收益（上年年报稀释每股收益）为负的股票自动记录到此文件并屏蔽。
+
+instock/config/blocklist_dividendYieldBelowOne.txt
+instock/config/blocklist_dividendGrowthYearZero.txt
+股息率低于1%的股票自动记录到此文件并屏蔽。
+息增年为0的股票自动记录到此文件并屏蔽。
 
 ## 参数解释
 名称：派息时显示为绿色，财报时显示为红色，点击股票名可添加/删除关注。

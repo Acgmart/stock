@@ -231,9 +231,9 @@
     <div class="high-dividend-toolbar">
         <div style="display: flex; align-items: center; gap: 18px;">
             <h1 class="high-dividend-title" style="margin: 0;">高股息列表</h1>
-            <label class="filter-control" title="勾选后隐藏扣非低于-10%或每股收益为负的股票">
-                <span>过滤扣非与亏损</span>
-                <input id="negativeEpsFilter" type="checkbox" checked>
+            <label class="filter-control" title="勾选后隐藏扣非低于-10%的股票">
+                <span>过滤扣非</span>
+                <input id="deductedProfitFilter" type="checkbox" checked>
             </label>
             <label class="filter-control" title="勾选后仅显示已关注的股票">
                 <span>关注</span>
@@ -304,7 +304,7 @@
         key: "name",
         direction: "asc"
     };
-    const FILTER_STORAGE_KEY = "highDividendNegativeEpsFilterEnabled";
+    const FILTER_STORAGE_KEY = "highDividendDeductedProfitFilterEnabled";
     const WATCH_FILTER_STORAGE_KEY = "highDividendWatchFilterEnabled";
     const MIN_DIVIDEND_YIELD_STORAGE_KEY = "highDividendMinDividendYield";
     const MIN_MARKET_CAP_STORAGE_KEY = "highDividendMinMarketCap";
@@ -485,13 +485,7 @@
     }
 
     function shouldHideByFilter(row) {
-        if (document.getElementById("negativeEpsFilter").checked) {
-            const hasNegativeEps = !(
-                row.diluted_eps === null
-                || row.diluted_eps === undefined
-                || row.diluted_eps === ""
-                || Number.isNaN(Number(row.diluted_eps))
-            ) && Number(row.diluted_eps) < 0;
+        if (document.getElementById("deductedProfitFilter").checked) {
             const hasWeakDeductedProfit = !(
                 row.deducted_profit_growth === null
                 || row.deducted_profit_growth === undefined
@@ -499,7 +493,7 @@
                 || Number.isNaN(Number(row.deducted_profit_growth))
             ) && Number(row.deducted_profit_growth) < -10;
 
-            if (hasNegativeEps || hasWeakDeductedProfit) {
+            if (hasWeakDeductedProfit) {
                 return true;
             }
         }
@@ -554,13 +548,13 @@
     }
 
     function isFilterEnabled() {
-        return document.getElementById("negativeEpsFilter").checked;
+        return document.getElementById("deductedProfitFilter").checked;
     }
 
     function loadFilterState() {
         const savedValue = window.localStorage.getItem(FILTER_STORAGE_KEY);
         if (savedValue !== null) {
-            document.getElementById("negativeEpsFilter").checked = savedValue === "true";
+            document.getElementById("deductedProfitFilter").checked = savedValue === "true";
         }
 
         const savedWatch = window.localStorage.getItem(WATCH_FILTER_STORAGE_KEY);
@@ -735,7 +729,7 @@
     $(document).ready(function() {
         loadFilterState();
         loadSortState();
-        $("#negativeEpsFilter").on("change", function() {
+        $("#deductedProfitFilter").on("change", function() {
             saveFilterState();
             renderRows(highDividendRows);
         });

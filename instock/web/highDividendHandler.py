@@ -513,6 +513,7 @@ def _schedule_ma120_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_ma120_positions, args=(stock_codes,), daemon=True)
     thread.start()
+    return thread
 
 
 def _read_low20_cache(db, stock_codes):
@@ -631,6 +632,7 @@ def _schedule_low20_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_low20_positions, args=(stock_codes,), daemon=True)
     thread.start()
+    return thread
 
 
 def _read_high20_cache(db, stock_codes):
@@ -749,6 +751,7 @@ def _schedule_high20_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_high20_positions, args=(stock_codes,), daemon=True)
     thread.start()
+    return thread
 
 
 def _read_profile_cache(db, stock_codes):
@@ -833,6 +836,7 @@ def _schedule_profile_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_profiles, args=(stock_codes,), daemon=True)
     thread.start()
+    return thread
 
 
 def _get_cached_profile_rows(db, stock_codes):
@@ -1032,6 +1036,7 @@ def _schedule_dividend_history_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_dividend_histories, args=(stock_codes,), daemon=True)
     thread.start()
+    return thread
 
 
 def _get_cached_dividend_history(db, code):
@@ -1176,6 +1181,7 @@ def _schedule_finance_report_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_finance_reports, args=(stock_codes,), daemon=True)
     thread.start()
+    return thread
 
 
 def _latest_finance_report(history):
@@ -1331,6 +1337,7 @@ def _schedule_cashflow_refresh(stock_codes):
 
     thread = threading.Thread(target=_refresh_cashflows, args=(stock_codes,), daemon=True)
     thread.start()
+    return thread
 
 
 def _is_annual_report_row(item):
@@ -1604,14 +1611,27 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 dividend_year = _latest_dividend_year(history)
                 dividend_per_10, details = _sum_fiscal_year_dividend(history, dividend_year)
                 dividend_growth_years = _consecutive_non_decline_years(history, dividend_year)
+                dividend_per_share = dividend_per_10 / 10
+                dividend_yield = None
+                if current_price and current_price > 0:
+                    dividend_yield = dividend_per_share / current_price * 100
+                # 优先屏蔽：息增年为0（只需派息历史）
                 if dividend_growth_years == 0 and history:
                     # 息增年为0：自动记录到 blocklist_dividendGrowthYearZero.txt 并屏蔽，不再读取缓存、不再刷新
                     blocklist.add_blocked(blocklist.GROWTH_YEAR_ZERO_FILE, code, stock_names.get(code, ""))
                     blocked_this_run_codes.add(code)
                     continue
+                # 优先屏蔽：股息率低于1%（只需派息历史与价格，无需财报/现金流）
+                if dividend_yield is not None and dividend_yield < 1 and history:
+                    # 股息率低于1%：自动记录到 blocklist_dividendYieldBelowOne.txt 并屏蔽，不再读取缓存、不再刷新
+                    blocklist.add_blocked(blocklist.YIELD_BELOW_ONE_FILE, code, stock_names.get(code, ""))
+                    blocked_this_run_codes.add(code)
+                    continue
             except Exception as error:
                 dividend_year = now.year - 1
                 dividend_per_10 = 0.0
+                dividend_per_share = 0.0
+                dividend_yield = None
                 details = []
                 dividend_changed = False
                 dividend_growth_years = 0
@@ -1639,15 +1659,6 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 annual_fcf = {}
                 errors.append(f"{code} 现金流数据读取失败：{error}")
 
-            dividend_per_share = dividend_per_10 / 10
-            dividend_yield = None
-            if current_price and current_price > 0:
-                dividend_yield = dividend_per_share / current_price * 100
-            if dividend_yield is not None and dividend_yield < 1:
-                # 股息率低于1%：自动记录到 blocklist_dividendYieldBelowOne.txt 并屏蔽，不再读取缓存、不再刷新
-                blocklist.add_blocked(blocklist.YIELD_BELOW_ONE_FILE, code, stock_names.get(code, ""))
-                blocked_this_run_codes.add(code)
-                continue
             ma120_row = ma120_by_code.get(code, {})
             ma120_position = None if not ma120_row else _to_float(ma120_row.get("ma120_position"))
             low20_row = low20_by_code.get(code, {})
@@ -1731,13 +1742,28 @@ class HighDividendDataHandler(webBase.BaseHandler):
             ):
                 stale_list[:] = [code for code in stale_list if code not in blocked_this_run_codes]
 
-        _schedule_ma120_refresh(stale_ma120_codes)
-        _schedule_low20_refresh(stale_low20_codes)
-        _schedule_high20_refresh(stale_high20_codes)
-        _schedule_profile_refresh(stale_profile_codes)
-        _schedule_dividend_history_refresh(stale_dividend_codes)
-        _schedule_finance_report_refresh(stale_finance_codes)
-        _schedule_cashflow_refresh(stale_cashflow_codes)
+        # 优先请求屏蔽文件相关数据（派息历史→息增年/股息率、财报→收益、行业），尽快完成屏蔽
+        # 其余数据（现金流、MA120、20日高低点）等屏蔽相关数据完成后才请求，屏蔽的股票不再请求
+        priority_threads = [t for t in (
+            _schedule_dividend_history_refresh(stale_dividend_codes),
+            _schedule_finance_report_refresh(stale_finance_codes),
+            _schedule_profile_refresh(stale_profile_codes),
+        ) if t]
+
+        def _schedule_tail_refreshes():
+            _schedule_cashflow_refresh(stale_cashflow_codes)
+            _schedule_ma120_refresh(stale_ma120_codes)
+            _schedule_low20_refresh(stale_low20_codes)
+            _schedule_high20_refresh(stale_high20_codes)
+
+        if priority_threads:
+            def _run_priority_then_tail():
+                for thread in priority_threads:
+                    thread.join()
+                _schedule_tail_refreshes()
+            threading.Thread(target=_run_priority_then_tail, daemon=True).start()
+        else:
+            _schedule_tail_refreshes()
         rows.sort(key=lambda item: (item["dividend_yield"] is not None, item["dividend_yield"] or 0), reverse=True)
         payload = {
             "total_stock_count": total_stock_count,

@@ -21,6 +21,10 @@ instock/config/blocklist_industry.txt
 每行一个需要屏蔽的申万二级行业，一般是不能出口的下行行业。
 对于银行业，可以直接用银行ETF易方达。
 
+instock/config/blocklist_industryStocks.txt
+屏蔽行业对应的股票缓存，避免重复判断行业。
+如需解除屏蔽，可手动编辑blocklist_industry.txt后删除股票缓存。
+
 instock/config/blocklist_dividendGrowthYearZero.txt
 息增年为0的股票自动记录到此文件并屏蔽。
 
@@ -38,7 +42,7 @@ instock/config/blocklist_negativeEps.txt
 昨日收盘价（隐藏）：昨日收盘价，判断涨跌。
 股价（隐藏）：盘中实时价格或收盘价。
 股息率：上一个财年的派息/当前股价，作为股东回报参考。
-  最低3%股息率，低于3%的股票不在考虑范围内。
+  默认最低3%股息率，可在页面调整。
 息增年：派息持续增加的年份，0年即上一个财年的派息额小于上上年。
 FCF（隐藏）：窄口径自由现金流。
 FCF/股息：窄口径FCF/股息，评估自由现金流对股息的覆盖率。

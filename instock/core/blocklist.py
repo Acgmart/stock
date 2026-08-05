@@ -15,6 +15,7 @@ _CODE_PATTERN = re.compile(r"(?<!\d)(?:sh|sz|bj)?(\d{6})(?!\d)", re.IGNORECASE)
 GROWTH_YEAR_ZERO_FILE = "blocklist_dividendGrowthYearZero.txt"
 YIELD_BELOW_ONE_FILE = "blocklist_dividendYieldBelowOne.txt"
 NEGATIVE_EPS_FILE = "blocklist_negativeEps.txt"
+INDUSTRY_STOCKS_FILE = "blocklist_industryStocks.txt"
 
 
 def _block_file_path(file_name):

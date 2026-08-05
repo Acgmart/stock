@@ -1534,16 +1534,29 @@ class HighDividendDataHandler(webBase.BaseHandler):
         errors = []
         stock_names = stocklist.get_stock_names()
 
-        price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
-        profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
         # 屏蔽 blocklist_industry.txt 中指定的申万二级行业，被屏蔽的股票不再读取缓存、不再刷新
         blocked_industries = stocklist.get_blocked_industries()
+        blocked_industry_stock_codes = set()
         if blocked_industries:
-            stock_codes = [
-                code for code in stock_codes
-                if profile_by_code.get(code) is None
-                or (profile_by_code[code].get("industry_name") or "") not in blocked_industries
-            ]
+            # 先从 blocklist_industryStocks.txt 缓存读取已屏蔽股票，避免重复判断行业
+            blocked_industry_stock_codes = set(blocklist.get_blocked_codes(blocklist.INDUSTRY_STOCKS_FILE))
+            if blocked_industry_stock_codes:
+                stock_codes = [code for code in stock_codes if code not in blocked_industry_stock_codes]
+        price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
+        profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
+        if blocked_industries:
+            # 未缓存的股票：命中屏蔽行业的自动记录到缓存文件并屏蔽
+            for code in stock_codes:
+                if code in blocked_industry_stock_codes:
+                    continue
+                profile = profile_by_code.get(code)
+                if profile is None:
+                    continue  # 暂无行业信息，本次不判断
+                if (profile.get("industry_name") or "") in blocked_industries:
+                    blocklist.add_blocked(blocklist.INDUSTRY_STOCKS_FILE, code, stock_names.get(code, ""))
+                    blocked_industry_stock_codes.add(code)
+            if blocked_industry_stock_codes:
+                stock_codes = [code for code in stock_codes if code not in blocked_industry_stock_codes]
         # 屏蔽 blocklist_dividendGrowthYearZero.txt 中记录的息增年为0的股票，被屏蔽的股票不再读取缓存、不再刷新
         blocked_zero_growth_codes = set(blocklist.get_blocked_codes(blocklist.GROWTH_YEAR_ZERO_FILE))
         if blocked_zero_growth_codes:

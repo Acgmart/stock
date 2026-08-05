@@ -164,3 +164,4 @@ test/
 instock/config/followlist.txt
 instock/config/blocklist_dividendGrowthYearZero.txt
 instock/config/blocklist_dividendYieldBelowOne.txt
+instock/config/blocklist_negativeEps.txt

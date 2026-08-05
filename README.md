@@ -27,6 +27,9 @@ instock/config/blocklist_dividendGrowthYearZero.txt
 instock/config/blocklist_dividendYieldBelowOne.txt
 股息率低于1%的股票自动记录到此文件并屏蔽。
 
+instock/config/blocklist_negativeEps.txt
+收益（上年年报稀释每股收益）为负的股票自动记录到此文件并屏蔽。
+
 ## 参数解释
 名称：派息时显示为绿色，财报时显示为红色，点击股票名可添加/删除关注。
 扣非：最新季报的扣非净利润同比增长，作为业绩参考。

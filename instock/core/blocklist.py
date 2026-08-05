@@ -14,6 +14,7 @@ _CODE_PATTERN = re.compile(r"(?<!\d)(?:sh|sz|bj)?(\d{6})(?!\d)", re.IGNORECASE)
 # 屏蔽文件（位于 instock/config/ 下）
 GROWTH_YEAR_ZERO_FILE = "blocklist_dividendGrowthYearZero.txt"
 YIELD_BELOW_ONE_FILE = "blocklist_dividendYieldBelowOne.txt"
+NEGATIVE_EPS_FILE = "blocklist_negativeEps.txt"
 
 
 def _block_file_path(file_name):

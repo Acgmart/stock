@@ -31,6 +31,13 @@
         gap: 18px;
     }
 
+    .stock-count-info {
+        color: #667085;
+        font-size: 13px;
+        margin-left: 10px;
+        white-space: nowrap;
+    }
+
     .filter-control {
         align-items: center;
         display: inline-flex;
@@ -244,6 +251,7 @@
                 <span>最低息增年</span>
                 <input id="minDividendGrowthYearsFilter" type="number" step="1" min="0" placeholder="0" style="width: 36px;">
             </label>
+            <span class="stock-count-info" id="stockCountInfo" title="有效股票数量 = 扣除所有屏蔽文件屏蔽后的股票数量，影响实时运行效率"></span>
         </div>
     </div>
 
@@ -700,6 +708,10 @@
             .done(function(payload) {
                 highDividendRows = enrichRows(payload.data || []);
                 renderRows(highDividendRows);
+                const stockCountInfo = document.getElementById("stockCountInfo");
+                if (stockCountInfo) {
+                    stockCountInfo.textContent = (payload.stock_count || 0) + "/" + (payload.total_stock_count || 0);
+                }
                 if (payload.errors && payload.errors.length > 0) {
                     console.warn(payload.errors.join("\\n"));
                 }

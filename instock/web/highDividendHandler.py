@@ -1529,6 +1529,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
         self.set_header("Content-Type", "application/json;charset=UTF-8")
         now = _now()
         stock_codes = [code for code in stocklist.get_stock_codes() if stocklist.is_a_stock_code(code)]
+        total_stock_count = len(stock_codes)
         rows = []
         errors = []
         stock_names = stocklist.get_stock_names()
@@ -1551,6 +1552,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
         blocked_yield_below_one_codes = set(blocklist.get_blocked_codes(blocklist.YIELD_BELOW_ONE_FILE))
         if blocked_yield_below_one_codes:
             stock_codes = [code for code in stock_codes if code not in blocked_yield_below_one_codes]
+        # 屏蔽 blocklist_negativeEps.txt 中记录的收益（上年年报稀释每股收益）为负的股票，被屏蔽的股票不再读取缓存、不再刷新
+        blocked_negative_eps_codes = set(blocklist.get_blocked_codes(blocklist.NEGATIVE_EPS_FILE))
+        if blocked_negative_eps_codes:
+            stock_codes = [code for code in stock_codes if code not in blocked_negative_eps_codes]
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         low20_by_code = _read_low20_cache(self.db, stock_codes)
         high20_by_code = _read_high20_cache(self.db, stock_codes)
@@ -1606,6 +1611,12 @@ class HighDividendDataHandler(webBase.BaseHandler):
             except Exception as error:
                 finance_report = {}
                 errors.append(f"{code} 财报数据读取失败：{error}")
+
+            # 收益（上年年报稀释每股收益）为负：自动记录到 blocklist_negativeEps.txt 并屏蔽，不再读取缓存、不再刷新
+            if finance_report.get("diluted_eps") is not None and finance_report.get("diluted_eps") < 0:
+                blocklist.add_blocked(blocklist.NEGATIVE_EPS_FILE, code, stock_names.get(code, ""))
+                blocked_this_run_codes.add(code)
+                continue
 
             try:
                 annual_fcf, cashflow_stale = _get_cached_annual_narrow_fcf(self.db, code)
@@ -1703,7 +1714,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
         if blocked_this_run_codes:
             for stale_list in (
                 stale_ma120_codes, stale_low20_codes, stale_high20_codes,
-                stale_profile_codes, stale_dividend_codes,
+                stale_profile_codes, stale_finance_codes, stale_dividend_codes,
             ):
                 stale_list[:] = [code for code in stale_list if code not in blocked_this_run_codes]
 
@@ -1716,7 +1727,8 @@ class HighDividendDataHandler(webBase.BaseHandler):
         _schedule_cashflow_refresh(stale_cashflow_codes)
         rows.sort(key=lambda item: (item["dividend_yield"] is not None, item["dividend_yield"] or 0), reverse=True)
         payload = {
-            "stock_count": len(stock_codes),
+            "total_stock_count": total_stock_count,
+            "stock_count": len(rows),
             "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             "cache_policy": {
                 "price": "盘中最多每30分钟刷新一次，盘后保持收盘价；外部请求间隔至少2秒",

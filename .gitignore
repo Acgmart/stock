@@ -163,3 +163,4 @@ test/
 .DS_Store
 instock/config/followlist.txt
 instock/config/blocklist_dividendGrowthYearZero.txt
+instock/config/blocklist_dividendYieldBelowOne.txt

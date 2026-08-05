@@ -1544,9 +1544,13 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 or (profile_by_code[code].get("industry_name") or "") not in blocked_industries
             ]
         # 屏蔽 blocklist_dividendGrowthYearZero.txt 中记录的息增年为0的股票，被屏蔽的股票不再读取缓存、不再刷新
-        blocked_zero_growth_codes = set(blocklist.get_blocked_codes())
+        blocked_zero_growth_codes = set(blocklist.get_blocked_codes(blocklist.GROWTH_YEAR_ZERO_FILE))
         if blocked_zero_growth_codes:
             stock_codes = [code for code in stock_codes if code not in blocked_zero_growth_codes]
+        # 屏蔽 blocklist_dividendYieldBelowOne.txt 中记录的股息率低于1%的股票，被屏蔽的股票不再读取缓存、不再刷新
+        blocked_yield_below_one_codes = set(blocklist.get_blocked_codes(blocklist.YIELD_BELOW_ONE_FILE))
+        if blocked_yield_below_one_codes:
+            stock_codes = [code for code in stock_codes if code not in blocked_yield_below_one_codes]
         ma120_by_code = _read_ma120_cache(self.db, stock_codes)
         low20_by_code = _read_low20_cache(self.db, stock_codes)
         high20_by_code = _read_high20_cache(self.db, stock_codes)
@@ -1584,7 +1588,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 dividend_growth_years = _consecutive_non_decline_years(history, dividend_year)
                 if dividend_growth_years == 0 and history:
                     # 息增年为0：自动记录到 blocklist_dividendGrowthYearZero.txt 并屏蔽，不再读取缓存、不再刷新
-                    blocklist.add_blocked(code, stock_names.get(code, ""))
+                    blocklist.add_blocked(blocklist.GROWTH_YEAR_ZERO_FILE, code, stock_names.get(code, ""))
                     blocked_this_run_codes.add(code)
                     continue
             except Exception as error:
@@ -1615,6 +1619,11 @@ class HighDividendDataHandler(webBase.BaseHandler):
             dividend_yield = None
             if current_price and current_price > 0:
                 dividend_yield = dividend_per_share / current_price * 100
+            if dividend_yield is not None and dividend_yield < 1:
+                # 股息率低于1%：自动记录到 blocklist_dividendYieldBelowOne.txt 并屏蔽，不再读取缓存、不再刷新
+                blocklist.add_blocked(blocklist.YIELD_BELOW_ONE_FILE, code, stock_names.get(code, ""))
+                blocked_this_run_codes.add(code)
+                continue
             ma120_row = ma120_by_code.get(code, {})
             ma120_position = None if not ma120_row else _to_float(ma120_row.get("ma120_position"))
             low20_row = low20_by_code.get(code, {})

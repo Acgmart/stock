@@ -435,6 +435,113 @@
         return value !== null && value !== undefined && value !== "" && !Number.isNaN(Number(value));
     }
 
+    function yieldTooltipText(row) {
+        if (row.dividend_per_share === null || row.dividend_per_share === undefined) {
+            return "";
+        }
+        const lines = [];
+        const details = (row.details || []).slice().sort(function(a, b) {
+            return String(a.report_date || "").localeCompare(String(b.report_date || ""));
+        });
+        details.forEach(function(d) {
+            const dateText = String(d.report_date || "");
+            const year = dateText.slice(0, 4) || (row.dividend_year != null ? String(row.dividend_year) : "");
+            const month = dateText.slice(5, 7);
+            let label = "季中";
+            if (month === "12") {
+                label = "年终";
+            } else if (month === "03") {
+                label = "一季";
+            } else if (month === "09") {
+                label = "三季";
+            }
+            const perShare = d.cash_per_10 != null && d.cash_per_10 !== "" ? Number(d.cash_per_10) / 10 : null;
+            lines.push(year + label + "派息" + formatNumber(perShare, 2));
+        });
+        lines.push((row.dividend_year != null ? row.dividend_year + "年度" : "") + "合计派息" + formatNumber(row.dividend_per_share, 2));
+        lines.push(priceLine(row));
+        return lines.join("\n");
+    }
+
+    function growthYearsTooltipText(row) {
+        const items = row.dividend_amount_by_year || [];
+        if (!items.length) {
+            return "";
+        }
+        return items.map(function(item) {
+            return item.year + "年度派息" + formatNumber(item.per_share, 2);
+        }).join("\n");
+    }
+
+    function formatYi(value) {
+        if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) {
+            return "--";
+        }
+        return formatNumber(Number(value) / 100000000, 1) + "亿";
+    }
+
+    function fcfSummaryLines(row) {
+        const lines = [];
+        if (row.narrow_fcf_skipped) {
+            const epsYear = row.diluted_eps_report_name || row.diluted_eps_report_date || "";
+            lines.push((epsYear ? epsYear + " " : "") + "稀释每股收益" + formatNumber(row.diluted_eps, 2) + "元");
+            lines.push("金融行业不适用窄口径FCF，以每股收益替代");
+            return lines;
+        }
+        if (row.narrow_fcf === null || row.narrow_fcf === undefined) {
+            return lines;
+        }
+        const yearName = row.narrow_fcf_report_name || row.narrow_fcf_report_date || "";
+        lines.push((yearName ? yearName + " " : "") + "窄口径FCF" + formatNumber(row.narrow_fcf, 2) + "元/股");
+        lines.push("总额" + formatYi(row.narrow_fcf_total) + "（经营现金流净额" + formatYi(row.netcash_operate) + " - 购建资产支出" + formatYi(row.construct_long_asset) + "）");
+        return lines;
+    }
+
+    function fcfDividendTooltipText(row) {
+        return fcfSummaryLines(row).join("\n");
+    }
+
+    function fcfPriceTooltipText(row) {
+        return fcfSummaryLines(row).join("\n");
+    }
+
+    // 共用的现价行（股息率、MA120、反弹、回落 tooltip 均使用）
+    function priceLine(row) {
+        return "现价 " + (row.price_time ? row.price_time + " " : "") + formatNumber(row.current_price, 2);
+    }
+
+    function ma120TooltipText(row) {
+        if (!row.ma120_trade_date && !row.price_time) {
+            return "";
+        }
+        const lines = [priceLine(row)];
+        lines.push("MA120 " + (row.ma120_trade_date ? row.ma120_trade_date.slice(5) + " " : "")
+            + (row.ma120_time ? row.ma120_time + " " : "") + formatNumber(row.ma120, 2));
+        return lines.join("\n");
+    }
+
+    function low20TooltipText(row) {
+        if (!row.low20_trade_date && !row.price_time) {
+            return "";
+        }
+        const lines = [priceLine(row)];
+        lines.push("近20日盘中最低 " + formatNumber(row.low20_lowest_low, 2)
+            + (row.low20_lowest_date ? "（" + row.low20_lowest_date.slice(5) + "）" : ""));
+        lines.push("K线 " + (row.low20_trade_date ? row.low20_trade_date.slice(5) + " " : "") + (row.low20_time ? row.low20_time : ""));
+        return lines.join("\n");
+    }
+
+    function high20TooltipText(row) {
+        if (!row.high20_trade_date && !row.price_time) {
+            return "";
+        }
+        const lines = [priceLine(row)];
+        lines.push("近20日盘中最高 " + formatNumber(row.high20_highest_high, 2)
+            + (row.high20_highest_date ? "（" + row.high20_highest_date.slice(5) + "）" : ""));
+        lines.push("K线 " + (row.high20_trade_date ? row.high20_trade_date.slice(5) + " " : "") + (row.high20_time ? row.high20_time : ""));
+        return lines.join("\n");
+    }
+
     function enrichRows(rows) {
         return (rows || []).map(function(row) {
             if (row.current_price != null && row.current_price > 0) {
@@ -662,33 +769,39 @@
                 formatBlankPercent(row.deducted_profit_growth, 1),
                 '</td>',
                 '<td class="number-cell yield-cell" title="',
-                escapeHtml(row.dividend_per_share != null ? (row.dividend_year != null ? row.dividend_year + '年度 ' : '') + '派息 ' + formatNumber(row.dividend_per_share, 2) + ' / ' + (row.price_date ? row.price_date + ' 现价 ' : '现价 ') + formatNumber(row.current_price, 2) : ''),
+                escapeHtml(yieldTooltipText(row)),
                 '">',
                 hasKnownValue(row.dividend_yield) ? formatBlankPercent(row.dividend_yield, 1) : '--',
                 '</td>',
-                '<td class="number-cell">',
+                '<td class="number-cell" title="',
+                escapeHtml(growthYearsTooltipText(row)),
+                '">',
                 row.dividend_growth_years ? formatBlankNumber(row.dividend_growth_years, 0) : '',
                 '</td>',
-                '<td class="number-cell fcf-dividend-cell" title="', row.narrow_fcf_skipped ? escapeHtml('金融行业：稀释每股收益/每股派息（替代窄口径FCF/股息）') : '', '">',
+                '<td class="number-cell fcf-dividend-cell" title="',
+                escapeHtml(fcfDividendTooltipText(row)),
+                '">',
                 formatBlankPercent(row.fcf_dividend === null || row.fcf_dividend === undefined ? null : row.fcf_dividend * 100, 0),
                 '</td>',
-                '<td class="number-cell fcf-price-cell" title="', row.narrow_fcf_skipped ? escapeHtml('金融行业：稀释每股收益/现价（替代窄口径FCF/现价）') : '', '">',
+                '<td class="number-cell fcf-price-cell" title="',
+                escapeHtml(fcfPriceTooltipText(row)),
+                '">',
                 formatBlankPercent(row.fcf_price, 1),
                 '</td>',
                 '<td class="number-cell',
                 row.ma120_signal === 'buy' ? ' ma120-buy-cell' : (row.ma120_signal === 'sell' ? ' ma120-sell-cell' : ''),
                 '" title="',
-                escapeHtml((row.ma120_trade_date || row.price_time) ? '现价 ' + (row.price_time ? row.price_time + ' ' : '') + formatNumber(row.ma120_close_price, 2) + ' / MA120 ' + (row.ma120_trade_date ? row.ma120_trade_date.slice(5) + ' ' : '') + (row.ma120_time ? row.ma120_time + ' ' : '') + formatNumber(row.ma120, 2) : ''),
+                escapeHtml(ma120TooltipText(row)),
                 '">',
                 formatBlankPercent(row.ma120_position, 1),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml((row.low20_trade_date || row.price_time) ? '现价 ' + (row.price_time ? row.price_time + ' ' : '') + formatNumber(row.low20_close_price, 2) + ' / 近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + (row.low20_lowest_date ? row.low20_lowest_date.slice(5) : '') + '） / K线 ' + (row.low20_trade_date ? row.low20_trade_date.slice(5) + ' ' : '') + (row.low20_time ? row.low20_time + ' ' : '') : ''),
+                escapeHtml(low20TooltipText(row)),
                 '">',
                 formatBlankPercent(row.low20_bounce, 1),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml((row.high20_trade_date || row.price_time) ? '现价 ' + (row.price_time ? row.price_time + ' ' : '') + formatNumber(row.high20_close_price, 2) + ' / 近20日盘中最高 ' + formatNumber(row.high20_highest_high, 2) + '（' + (row.high20_highest_date ? row.high20_highest_date.slice(5) : '') + '） / K线 ' + (row.high20_trade_date ? row.high20_trade_date.slice(5) + ' ' : '') + (row.high20_time ? row.high20_time + ' ' : '') : ''),
+                escapeHtml(high20TooltipText(row)),
                 '">',
                 formatBlankPercent(row.high20_decline, 1),
                 '</td>',

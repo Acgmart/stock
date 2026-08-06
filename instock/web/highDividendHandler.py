@@ -39,6 +39,7 @@ from instock.core.dividend import (
     _get_cached_dividend_history,
     _sum_fiscal_year_dividend,
     _consecutive_non_decline_years,
+    _dividend_amounts_by_year,
     _schedule_dividend_history_refresh,
 )
 from instock.core.financial import (
@@ -179,10 +180,19 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     dividend_per_share = None
                     dividend_yield = None
                     dividend_growth_years = None
+                    dividend_amount_by_year = []
                     details = []
                 else:
                     dividend_per_10, details = _sum_fiscal_year_dividend(history, dividend_year)
                     dividend_growth_years = _consecutive_non_decline_years(history, dividend_year)
+                    # 息增年悬浮提示：连续增长段（growth+1 年）加中断对比年，共 growth+2 年，每股派息额
+                    year_totals = _dividend_amounts_by_year(history)
+                    first_year = min(year_totals) if year_totals else dividend_year
+                    window_start = max(first_year, dividend_year - dividend_growth_years - 1)
+                    dividend_amount_by_year = [
+                        {"year": year, "per_share": round(year_totals.get(year, 0.0) / 10, 4)}
+                        for year in range(dividend_year, window_start - 1, -1)
+                    ]
                     dividend_per_share = dividend_per_10 / 10
                     # 股息率未知（派息历史未抓取）时为 None 显示 --；
                     # 派息历史已抓取但最近财年无派息时股息率真实为 0（由股息率<1%规则屏蔽）
@@ -202,6 +212,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 details = []
                 dividend_changed = False
                 dividend_growth_years = 0
+                dividend_amount_by_year = []
                 errors.append(f"{code} 派息数据读取失败：{error}")
 
             # 屏蔽优先级：行业（请求开始已处理）→ 收益 → 股息率 → 息增年
@@ -333,6 +344,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "dividend_per_share": None if dividend_per_share is None else round(dividend_per_share, 4),
                 "dividend_yield": dividend_yield,
                 "dividend_growth_years": dividend_growth_years,
+                "dividend_amount_by_year": dividend_amount_by_year,
                 "dividend_changed": dividend_changed,
                 "details": details,
             })

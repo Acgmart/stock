@@ -247,14 +247,8 @@ def _sum_fiscal_year_dividend(history, year):
     return total_per_10, details
 
 
-def _consecutive_non_decline_years(history, year):
-    """返回息增年：从最近已完结财年起，派息不低于上一年的连续年数。
-
-    持平（相等）算作继续，只有下降才中断；
-    无派息的断档财年按 0 参与比较，恢复派息（0→正）算作增加；
-    连续无派息年份不计数（0→0 中断），避免多年断档虚增年数；
-    不超过已记录年份范围。
-    """
+def _dividend_amounts_by_year(history):
+    """按财年聚合现金派息总额（每10股），用于息增年计算与悬浮提示。"""
     dividends_by_year = {}
     for item in history:
         report_date = _date_text(item.get("REPORT_DATE"))
@@ -265,6 +259,18 @@ def _consecutive_non_decline_years(history, year):
             continue
         fiscal_year = int(report_date[:4])
         dividends_by_year[fiscal_year] = dividends_by_year.get(fiscal_year, 0.0) + cash_per_10
+    return dividends_by_year
+
+
+def _consecutive_non_decline_years(history, year):
+    """返回息增年：从最近已完结财年起，派息不低于上一年的连续年数。
+
+    持平（相等）算作继续，只有下降才中断；
+    无派息的断档财年按 0 参与比较，恢复派息（0→正）算作增加；
+    连续无派息年份不计数（0→0 中断），避免多年断档虚增年数；
+    不超过已记录年份范围。
+    """
+    dividends_by_year = _dividend_amounts_by_year(history)
 
     if not dividends_by_year:
         return 0

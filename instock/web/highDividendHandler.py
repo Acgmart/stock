@@ -159,8 +159,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 dividend_per_10, details = _sum_fiscal_year_dividend(history, dividend_year)
                 dividend_growth_years = _consecutive_non_decline_years(history, dividend_year)
                 dividend_per_share = dividend_per_10 / 10
+                # 派息历史未抓取（未知）时股息率为 None，不显示为 0；
+                # 有派息记录的股票每股派息必大于0，无需担心漏掉真实0派息
                 dividend_yield = None
-                if current_price and current_price > 0:
+                if dividend_per_share > 0 and current_price and current_price > 0:
                     dividend_yield = dividend_per_share / current_price * 100
             except Exception as error:
                 dividend_year = now.year - 1

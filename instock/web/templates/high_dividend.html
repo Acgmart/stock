@@ -431,6 +431,10 @@
         return Number(value);
     }
 
+    function hasKnownValue(value) {
+        return value !== null && value !== undefined && value !== "" && !Number.isNaN(Number(value));
+    }
+
     function enrichRows(rows) {
         return (rows || []).map(function(row) {
             if (row.current_price != null && row.current_price > 0) {
@@ -515,10 +519,8 @@
         }
 
         const minDividendYield = parseFloat(document.getElementById("minDividendYieldFilter").value);
-        if (!Number.isNaN(minDividendYield) && minDividendYield > 0) {
-            if (row.dividend_yield === null || row.dividend_yield === undefined || row.dividend_yield === "" || Number.isNaN(Number(row.dividend_yield))) {
-                return true;
-            }
+        // 股息率未知（派息历史未抓取）不等于0，此时过滤不生效
+        if (!Number.isNaN(minDividendYield) && minDividendYield > 0 && hasKnownValue(row.dividend_yield)) {
             if (Number(row.dividend_yield) < minDividendYield) {
                 return true;
             }
@@ -662,7 +664,7 @@
                 '<td class="number-cell yield-cell" title="',
                 escapeHtml(row.dividend_per_share != null ? (row.dividend_year != null ? row.dividend_year + '年度 ' : '') + '派息 ' + formatNumber(row.dividend_per_share, 2) + ' / ' + (row.price_date ? row.price_date + ' 现价 ' : '现价 ') + formatNumber(row.current_price, 2) : ''),
                 '">',
-                row.dividend_yield ? formatBlankPercent(row.dividend_yield, 1) : '',
+                hasKnownValue(row.dividend_yield) ? formatBlankPercent(row.dividend_yield, 1) : '--',
                 '</td>',
                 '<td class="number-cell">',
                 row.dividend_growth_years ? formatBlankNumber(row.dividend_growth_years, 0) : '',

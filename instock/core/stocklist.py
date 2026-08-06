@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import random
 import re
 import time
 import threading
@@ -13,15 +14,17 @@ __date__ = '2026/5/12 '
 
 _REQUEST_LOCK = threading.Lock()
 _LAST_REQUEST_AT = 0.0
-_REQUEST_INTERVAL_SECONDS = 2
+_REQUEST_INTERVAL_SECONDS = 0.4
 
 
 def _throttle_request():
+    # 间隔加 ±20% 抖动，避免固定节律被风控识别
     global _LAST_REQUEST_AT
     with _REQUEST_LOCK:
         elapsed = time.time() - _LAST_REQUEST_AT
-        if elapsed < _REQUEST_INTERVAL_SECONDS:
-            time.sleep(_REQUEST_INTERVAL_SECONDS - elapsed)
+        target = _REQUEST_INTERVAL_SECONDS * random.uniform(0.8, 1.2)
+        if elapsed < target:
+            time.sleep(target - elapsed)
         _LAST_REQUEST_AT = time.time()
 
 DEFAULT_STOCK_CODES = ("600900",)

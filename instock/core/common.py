@@ -4,6 +4,7 @@
 import datetime
 import hashlib
 import json
+import random
 import threading
 import time
 from decimal import Decimal
@@ -19,7 +20,7 @@ _CACHE_TABLE_READY = False
 _CACHE_TABLE_LOCK = threading.Lock()
 _EXTERNAL_REQUEST_LOCK = threading.Lock()
 _LAST_EXTERNAL_REQUEST_AT = 0.0
-_EXTERNAL_REQUEST_INTERVAL_SECONDS = 2
+_EXTERNAL_REQUEST_INTERVAL_SECONDS = 1
 _PRICE_CACHE_TABLE = "cn_high_dividend_price_cache"
 _DIVIDEND_HISTORY_CACHE_TABLE = "cn_high_dividend_dividend_history_cache"
 _FINANCE_REPORT_CACHE_TABLE = "cn_high_dividend_finance_report_cache"
@@ -66,11 +67,13 @@ def _json_default(value):
 
 
 def _throttle_external_request():
+    # 间隔加 ±20% 抖动，避免固定节律被风控识别
     global _LAST_EXTERNAL_REQUEST_AT
     with _EXTERNAL_REQUEST_LOCK:
         elapsed = time.time() - _LAST_EXTERNAL_REQUEST_AT
-        if elapsed < _EXTERNAL_REQUEST_INTERVAL_SECONDS:
-            time.sleep(_EXTERNAL_REQUEST_INTERVAL_SECONDS - elapsed)
+        target = _EXTERNAL_REQUEST_INTERVAL_SECONDS * random.uniform(0.8, 1.2)
+        if elapsed < target:
+            time.sleep(target - elapsed)
         _LAST_EXTERNAL_REQUEST_AT = time.time()
 
 

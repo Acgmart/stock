@@ -18,7 +18,7 @@ class eastmoney_fetcher:
     封装了会话管理和请求发送功能
     """
 
-    _request_interval = 2
+    _request_interval = 1
     _last_request_time = 0
     _request_lock = threading.Lock()
 
@@ -74,10 +74,12 @@ class eastmoney_fetcher:
         return url
 
     def _throttle_request(self):
+        # 间隔加 ±20% 抖动，避免固定节律被风控识别
         with self._request_lock:
             elapsed = time.time() - self._last_request_time
-            if elapsed < self._request_interval:
-                time.sleep(self._request_interval - elapsed)
+            target = self._request_interval * random.uniform(0.8, 1.2)
+            if elapsed < target:
+                time.sleep(target - elapsed)
             self.__class__._last_request_time = time.time()
 
     def make_request(self, url, params=None, retry=3, timeout=10):
@@ -103,9 +105,15 @@ class eastmoney_fetcher:
                 response.raise_for_status()  # 检查HTTP错误
                 return response
             except requests.exceptions.RequestException as e:
+                status_code = getattr(getattr(e, "response", None), "status_code", None)
                 print(f"请求错误: {e}, 第 {i + 1}/{retry} 次重试")
                 if i < retry - 1:
-                    # 随机延迟后重试
-                    time.sleep(random.uniform(1, 3))
+                    if status_code in (403, 429):
+                        # 被限流/拦截时大幅退避，避免继续高频撞击导致封IP
+                        print("检测到限流/拦截，退避 60 秒后重试")
+                        time.sleep(60)
+                    else:
+                        # 随机延迟后重试
+                        time.sleep(random.uniform(1, 3))
                 else:
                     raise

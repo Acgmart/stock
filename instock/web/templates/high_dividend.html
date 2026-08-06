@@ -366,10 +366,13 @@
     }
 
     function compareRows(left, right) {
-        const leftSignal = left && (left.ma120_signal === "buy" || left.ma120_signal === "sell");
-        const rightSignal = right && (right.ma120_signal === "buy" || right.ma120_signal === "sell");
-        if (leftSignal !== rightSignal) {
-            return leftSignal ? -1 : 1;
+        // 置顶优先级：买点提示 > 卖点提示 > 无提示
+        const leftSignal = left && left.ma120_signal;
+        const rightSignal = right && right.ma120_signal;
+        const leftSignalRank = leftSignal === "buy" ? 2 : (leftSignal === "sell" ? 1 : 0);
+        const rightSignalRank = rightSignal === "buy" ? 2 : (rightSignal === "sell" ? 1 : 0);
+        if (leftSignalRank !== rightSignalRank) {
+            return leftSignalRank > rightSignalRank ? -1 : 1;
         }
         const leftPinned = Boolean(left && (left.dividend_changed || left.finance_report_changed));
         const rightPinned = Boolean(right && (right.dividend_changed || right.finance_report_changed));

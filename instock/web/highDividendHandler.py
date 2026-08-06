@@ -20,7 +20,7 @@ from instock.core.market_quotes import (
     _read_ma120_cache,
     _read_low20_cache,
     _read_high20_cache,
-    _read_latest_kline_closes,
+    _read_recent_kline_closes,
     _is_ma120_cache_stale,
     _is_low20_cache_stale,
     _is_high20_cache_stale,
@@ -79,8 +79,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 stock_codes = [code for code in stock_codes if code not in blocked_industry_stock_codes]
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
         profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
-        # 昨日收盘价（隐藏）：K线缓存最新一根收盘（前复权），盘中为上一交易日、收盘后与现价一致
-        kline_latest_by_code = _read_latest_kline_closes(self.db, stock_codes)
+        # 昨日收盘价：K线缓存最近两根收盘（前复权）——盘中最新一根即上一交易日，
+        # 收盘后当天K线已入库时最新一根为当天、倒数第二根代表昨日（买卖点提示盘后依然有效）
+        kline_recent_by_code = _read_recent_kline_closes(self.db, stock_codes)
+        today_text = now.date().isoformat()
         if blocked_industries:
             # 未缓存的股票：命中屏蔽行业的自动记录到缓存文件并屏蔽
             for code in stock_codes:
@@ -139,7 +141,16 @@ class HighDividendDataHandler(webBase.BaseHandler):
             price_row = price_by_code.get(code)
             current_price = None if price_row is None else _to_float(price_row.get("current_price"))
             change_rate = None if price_row is None else _to_float(price_row.get("change_rate"))
-            pre_close_price = kline_latest_by_code.get(code)
+            recent = kline_recent_by_code.get(code)
+            pre_close_price = None
+            if recent:
+                latest_date, latest_close = recent[0]
+                if latest_date == today_text and len(recent) > 1:
+                    # 收盘后当天K线已入库：昨日收盘用倒数第二根
+                    pre_close_price = recent[1][1]
+                else:
+                    # 盘中/周末/假日/盘后未更新：最新一根即上一交易日收盘
+                    pre_close_price = latest_close
             try:
                 history, dividend_changed, dividend_history_stale = _get_cached_dividend_history(self.db, code)
                 if dividend_history_stale:
@@ -211,6 +222,15 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     fcf_dividend = narrow_fcf / dividend_per_share
                 if current_price and current_price > 0:
                     fcf_price = narrow_fcf / current_price * 100
+            elif annual_fcf.get("narrow_fcf_skipped"):
+                # 金融行业不适用窄口径FCF：用稀释每股收益替代
+                # （收益/每股派息 = 派息覆盖率，收益/现价 = 盈利收益率）
+                eps = finance_report.get("diluted_eps")
+                if eps is not None and eps > 0:
+                    if dividend_per_share > 0:
+                        fcf_dividend = eps / dividend_per_share
+                    if current_price and current_price > 0:
+                        fcf_price = eps / current_price * 100
             name = stock_names.get(code, "")
 
             rows.append({

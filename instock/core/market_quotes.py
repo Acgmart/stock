@@ -295,25 +295,28 @@ def _write_kline_cache(db, code, rows):
     """, *values)
 
 
-def _read_latest_kline_closes(db, stock_codes):
-    """读取每股K线缓存最新一根的收盘价（前复权），作为昨日收盘价（隐藏）。
+def _read_recent_kline_closes(db, stock_codes):
+    """读取每股K线缓存最近两根的收盘价（前复权），返回 {code: [(日期, 收盘), (日期, 收盘)]}（新→旧）。
 
-    盘中最新一根为上一交易日收盘，收盘后为当天收盘（与现价一致）。
+    盘中最新一根为上一交易日收盘；
+    收盘后当天K线已入库时，最新一根为当天、倒数第二根代表昨日，供买卖点信号盘后使用。
     """
     if not stock_codes:
         return {}
     placeholders = ",".join(["%s"] * len(stock_codes))
     rows = db.query(f"""
-        SELECT k.`code`, k.`close_price`
-        FROM `{_KLINE_CACHE_TABLE}` k
-        JOIN (
-            SELECT `code`, MAX(`trade_date`) AS max_date
+        SELECT code, rn, trade_date, close_price FROM (
+            SELECT `code`, `trade_date`, `close_price`,
+                   ROW_NUMBER() OVER (PARTITION BY `code` ORDER BY `trade_date` DESC) AS rn
             FROM `{_KLINE_CACHE_TABLE}`
             WHERE `code` IN ({placeholders})
-            GROUP BY `code`
-        ) m ON k.`code` = m.`code` AND k.`trade_date` = m.max_date
+        ) t WHERE rn <= 2 ORDER BY `code`, rn
     """, *stock_codes)
-    return {row["code"]: _to_float(row.get("close_price")) for row in rows}
+    result = {}
+    for row in rows:
+        result.setdefault(row["code"], []).append(
+            (str(row["trade_date"])[:10], _to_float(row.get("close_price"))))
+    return result
 
 
 def _has_pending_ex_dividend(db, code, cached_max_date):

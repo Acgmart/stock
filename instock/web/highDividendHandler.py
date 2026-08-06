@@ -13,6 +13,8 @@ from instock.core.common import (
     _now,
     _date_text,
     _json_default,
+    _market_phase,
+    _previous_trading_day,
     _ensure_cache_tables,
     _get_or_sync_fiscal_year_base,
 )
@@ -83,9 +85,12 @@ class HighDividendDataHandler(webBase.BaseHandler):
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
         profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
         # 昨日收盘价：K线缓存最近两根收盘（前复权）——盘中最新一根即上一交易日，
-        # 收盘后当天K线已入库时最新一根为当天、倒数第二根代表昨日（买卖点提示盘后依然有效）
+        # 收盘后当天K线已入库时最新一根为当天、倒数第二根代表昨日（买卖点提示盘后依然有效）；
+        # 盘前（0点至9点半开盘）与休市（周末）K线仍为上一交易日，同样用倒数第二根延续盘后提示
         kline_recent_by_code = _read_recent_kline_closes(self.db, stock_codes)
         today_text = now.date().isoformat()
+        phase = _market_phase(now)
+        pre_open_expected_kline_date = _previous_trading_day(now.date()).isoformat()
         if blocked_industries:
             # 未缓存的股票：命中屏蔽行业的自动记录到缓存文件并屏蔽
             for code in stock_codes:
@@ -148,11 +153,14 @@ class HighDividendDataHandler(webBase.BaseHandler):
             pre_close_price = None
             if recent:
                 latest_date, latest_close = recent[0]
-                if latest_date == today_text and len(recent) > 1:
-                    # 收盘后当天K线已入库：昨日收盘用倒数第二根
+                if len(recent) > 1 and (
+                    (phase == "after_close" and latest_date == today_text)
+                    or (phase in ("before_open", "closed") and latest_date == pre_open_expected_kline_date)
+                ):
+                    # 盘后当天K线已入库 / 盘前、休市延续盘后提示：昨日收盘用倒数第二根
                     pre_close_price = recent[1][1]
                 else:
-                    # 盘中/周末/假日/盘后未更新：最新一根即上一交易日收盘
+                    # 盘中/盘后未更新/假日：最新一根即上一交易日收盘
                     pre_close_price = latest_close
             try:
                 finance_report, finance_report_stale = _get_cached_latest_finance_report(self.db, code, fiscal_year_base)

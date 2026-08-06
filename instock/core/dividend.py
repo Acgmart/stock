@@ -30,26 +30,50 @@ _DIVIDEND_REFRESH_LOCK = threading.Lock()
 _DIVIDEND_REFRESH_RUNNING = False
 
 
-def _fetch_dividend_history(code):
-    _throttle_external_request()
-    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-    params = {
-        "sortColumns": "REPORT_DATE",
-        "sortTypes": "-1",
-        "pageSize": "100",
-        "pageNumber": "1",
-        "reportName": "RPT_SHAREBONUS_DET",
-        "columns": "ALL",
-        "quoteColumns": "",
-        "source": "WEB",
-        "client": "WEB",
-        "filter": f'(SECURITY_CODE="{code}")',
-    }
-    response = _DIVIDEND_FETCHER.make_request(url, params=params, timeout=15)
-    payload = response.json()
-    if not payload.get("success") or not payload.get("result"):
-        return []
-    return payload["result"].get("data") or []
+_DIVIDEND_BATCH_SIZE = 10
+_DIVIDEND_BATCH_PAGE_SIZE = 400
+
+
+def _fetch_dividend_histories_batch(codes):
+    """批量抓取派息历史，每批10只一次请求，返回 {code: history}。
+
+    派息历史每股最多约30条，10只一批、pageSize=400 保证不截断。
+    批次抓取失败时该批股票不出现在结果中（保持原缓存，下次重试）；
+    批次成功但无派息记录的股票返回空列表（确认无分红）。
+    """
+    result = {}
+    if not codes:
+        return result
+    for i in range(0, len(codes), _DIVIDEND_BATCH_SIZE):
+        batch = codes[i:i + _DIVIDEND_BATCH_SIZE]
+        code_list = '","'.join(batch)
+        _throttle_external_request()
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+        params = {
+            "reportName": "RPT_SHAREBONUS_DET",
+            "columns": "ALL",
+            "quoteColumns": "",
+            "filter": f'(SECURITY_CODE in ("{code_list}"))',
+            "pageNumber": "1",
+            "pageSize": str(_DIVIDEND_BATCH_PAGE_SIZE),
+            "sortTypes": "-1",
+            "sortColumns": "REPORT_DATE",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        try:
+            response = _DIVIDEND_FETCHER.make_request(url, params=params, timeout=15)
+            payload = response.json()
+            if payload.get("success") and payload.get("result"):
+                for code in batch:
+                    result.setdefault(code, [])
+                for row in payload["result"].get("data") or []:
+                    code = row.get("SECURITY_CODE")
+                    if code in batch:
+                        result[code].append(row)
+        except Exception:
+            continue
+    return result
 
 
 def _history_name(history):
@@ -132,13 +156,21 @@ def _refresh_dividend_histories(stock_codes):
     try:
         db = mysql.Connection(**mdb.MYSQL_CONN)
         _ensure_cache_tables(db)
+        now = _now()
+        # 先过滤过期股票，再批量抓取（每批10只）
+        need_codes = []
         for code in stock_codes:
-            now = _now()
             cache_row, history = _read_dividend_history_cache(db, code)
-            if not _is_dividend_history_cache_stale(cache_row, history, now):
-                continue
-
-            fresh_history = _fetch_dividend_history(code)
+            if _is_dividend_history_cache_stale(cache_row, history, now):
+                need_codes.append(code)
+        if not need_codes:
+            return
+        histories = _fetch_dividend_histories_batch(need_codes)
+        for code in need_codes:
+            if code not in histories:
+                continue  # 所在批次抓取失败，保持原缓存，下次重试
+            fresh_history = histories[code]
+            cache_row, history = _read_dividend_history_cache(db, code)
             old_hash = None
             if cache_row is not None:
                 old_hash = cache_row.get("history_hash")

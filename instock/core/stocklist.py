@@ -121,105 +121,124 @@ def is_a_stock_code(code):
     return str(code).startswith(('600', '601', '603', '605', '000', '001', '002', '003', '300', '301'))
 
 
-def fetch_profile_data(codes):
-    """从腾讯获取市值，从东方财富获取行业，每日批量刷新一次。
+_BATCH_SIZE = 100
 
-    由于 push2.eastmoney.com 不可达，拆分为两个独立数据源：
-    - 市值：腾讯 qt.gtimg.cn 行情接口，field 44 为总市值（亿）
-    - 行业：东方财富 datacenter RPT_F10_ORG_BASICINFO，取 BOARD_NAME_2LEVEL（申万二级）
-    """
-    if not codes:
-        return {}
+
+def _batch_codes(codes):
+    """按100只一批拆分请求。"""
     codes = list(codes)
-    result = {code: {"market_cap": None, "industry_name": ""} for code in codes}
-
-    # 1. 市值 — 腾讯行情接口（批量）
-    _fetch_market_cap_from_tencent(codes, result)
-
-    # 2. 行业 — 东方财富 F10 接口（批量，datacenter 域可通）
-    _fetch_industry_from_eastmoney(codes, result)
-
-    return result
+    for i in range(0, len(codes), _BATCH_SIZE):
+        yield codes[i:i + _BATCH_SIZE]
 
 
-def _fetch_market_cap_from_tencent(codes, result):
-    """从腾讯行情接口批量获取总市值（亿）。"""
-    symbols = ",".join(f"{'sh' if c.startswith('6') else 'sz'}{c}" for c in codes)
-    url = f"https://qt.gtimg.cn/q={symbols}"
+def fetch_market_cap_data(codes):
+    """从腾讯行情接口分批获取流通市值（亿），每批100只一次请求，返回 {code: market_cap}。
+
+    市值随行情变化，需要定期刷新，与行业分开独立请求。
+    """
+    result = {}
+    if not codes:
+        return result
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://gu.qq.com/",
     }
-    try:
-        _throttle_request()
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        for line in resp.text.strip().split(";"):
-            if '="' not in line:
-                continue
-            name_part, data = line.split('="', 1)
-            symbol = name_part.split("_")[-1]
-            code = symbol[-6:]
-            fields = data.strip('"').split("~")
-            if len(fields) > 44:
-                market_cap = _to_float(fields[44])
-                if code in result and market_cap is not None:
-                    result[code]["market_cap"] = market_cap
-    except Exception:
-        pass
+    for batch in _batch_codes(codes):
+        symbols = ",".join(f"{'sh' if code.startswith('6') else 'sz'}{code}" for code in batch)
+        url = f"https://qt.gtimg.cn/q={symbols}"
+        try:
+            _throttle_request()
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            for line in resp.text.strip().split(";"):
+                if '="' not in line:
+                    continue
+                symbol_part, data = line.split('="', 1)
+                code = symbol_part.split("_")[-1][-6:]
+                fields = data.strip('"').split("~")
+                if len(fields) > 45:
+                    market_cap = _to_float(fields[45])
+                    if market_cap is not None:
+                        result[code] = market_cap
+        except Exception:
+            pass
+    return result
 
 
-def _fetch_industry_from_eastmoney(codes, result):
-    """从东方财富 F10 批量获取申万二级行业。"""
-    code_list = '","'.join(codes)
-    url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
-    params = {
-        "reportName": "RPT_F10_ORG_BASICINFO",
-        "columns": "SECURITY_CODE,BOARD_NAME_2LEVEL",
-        "filter": f'(SECURITY_CODE in ("{code_list}"))',
-        "pageNumber": "1",
-        "pageSize": str(len(codes) + 10),
-        "source": "HSF10",
-    }
+def fetch_industry_data(codes):
+    """从东方财富 F10 分批获取申万二级行业，每批100只一次请求，返回 {code: industry_name}。
+
+    行业基本不变，只在无缓存时请求一次，不需要定期刷新。
+    全量一次请求 filter 过长会被拒绝，必须分批。
+    """
+    result = {}
+    if not codes:
+        return result
+    codes = list(codes)
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://quote.eastmoney.com/",
     }
-    try:
-        _throttle_request()
-        resp = requests.get(url, params=params, headers=headers, timeout=15)
-        resp.raise_for_status()
-        payload = resp.json()
-        if payload.get("success") and payload.get("result", {}).get("data"):
-            for row in payload["result"]["data"]:
-                code = row.get("SECURITY_CODE", "")
-                if code in result:
-                    result[code]["industry_name"] = row.get("BOARD_NAME_2LEVEL") or ""
-    except Exception:
-        pass
+    for batch in _batch_codes(codes):
+        code_list = '","'.join(batch)
+        url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
+        params = {
+            "reportName": "RPT_F10_ORG_BASICINFO",
+            "columns": "SECURITY_CODE,BOARD_NAME_2LEVEL",
+            "filter": f'(SECURITY_CODE in ("{code_list}"))',
+            "pageNumber": "1",
+            "pageSize": str(len(batch) + 10),
+            "source": "HSF10",
+        }
+        try:
+            _throttle_request()
+            resp = requests.get(url, params=params, headers=headers, timeout=15)
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("success") and payload.get("result", {}).get("data"):
+                for row in payload["result"]["data"]:
+                    code = row.get("SECURITY_CODE", "")
+                    industry_name = row.get("BOARD_NAME_2LEVEL") or ""
+                    if code in codes and industry_name:
+                        result[code] = industry_name
+        except Exception:
+            pass
+    return result
 
 
 def make_selected_stock_rows(date):
-    """从腾讯行情接口批量获取实时股价数据。
+    """从腾讯行情接口分批获取实时现价数据，每批100只一次请求。
 
     原使用新浪 hq.sinajs.cn，该域名已不可达（403）。
+    单批失败跳过，不影响其余批次。
     """
     codes = [code for code in get_stock_codes() if is_a_stock_code(code)]
     if not codes:
         return None
 
-    symbols = ",".join(f"{'sh' if code.startswith('6') else 'sz'}{code}" for code in codes)
-    url = f"https://qt.gtimg.cn/q={symbols}"
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://gu.qq.com/",
     }
-    _throttle_request()
-    response = requests.get(url, headers=headers, timeout=15)
-    response.raise_for_status()
-
     rows = []
-    for line in response.text.strip().split(";"):
+    for batch in _batch_codes(codes):
+        symbols = ",".join(f"{'sh' if code.startswith('6') else 'sz'}{code}" for code in batch)
+        url = f"https://qt.gtimg.cn/q={symbols}"
+        try:
+            _throttle_request()
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            rows.extend(_parse_quote_lines(response.text, date))
+        except Exception:
+            # 单批失败跳过，不影响其余批次
+            continue
+    return rows or None
+
+
+def _parse_quote_lines(text, date):
+    """解析腾讯行情接口返回文本为现价行列表。"""
+    rows = []
+    for line in text.strip().split(";"):
         if '="' not in line:
             continue
         symbol_part, data = line.split('="', 1)
@@ -274,21 +293,23 @@ def make_selected_stock_rows(date):
             "pre_close_price": pre_close,
         })
 
-    return rows or None
+    return rows
 
 
-def fetch_daily_ma120_position(code, today=None, current_price=None):
-    """获取日K线MA120位置，使用腾讯前复权价格。
+def fetch_daily_kline_rows(code, today=None):
+    """请求125根前复权日K，返回升序 [(trade_date, close, high, low), ...]。
 
     腾讯K线API返回前复权（qfq）日线数据，
     确保MA120计算时历史价格已就除权除息进行调整，
     与主流股票APP的MA120数值一致。
-    current_price 若传入正数，则优先用作当前价格计算 MA120 位置（盘中实时价格）。
+    125根 = 120根MA120 + 盘中排除当日未完成K线1根 + 少量容错余量。
+    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线）。
+    上市不足125个交易日时返回实际可用的K线；请求或解析失败返回 None。
     """
     market = "sh" if code.startswith("6") else "sz"
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     params = {
-        "param": f"{market}{code},day,,,170,qfq",
+        "param": f"{market}{code},day,,,125,qfq",
     }
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -306,69 +327,6 @@ def fetch_daily_ma120_position(code, today=None, current_price=None):
     if not klines:
         return None
 
-    rows = []
-    for item in klines:
-        if len(item) < 3:
-            continue
-        # item format: [date, open, close, high, low, volume, ...]
-        close_price = _to_float(item[2])
-        if close_price is None or close_price <= 0:
-            continue
-        trade_date = str(item[0])[:10]
-        if not trade_date:
-            continue
-        rows.append((trade_date, close_price))
-
-    if today is not None:
-        today_text = today.strftime("%Y-%m-%d")
-        rows = [row for row in rows if row[0] < today_text]
-
-    if len(rows) < 120:
-        return None
-
-    trade_date, close_price = rows[-1]
-    ma120 = sum(close for _, close in rows[-120:]) / 120
-    if ma120 <= 0:
-        return None
-
-    # 优先使用实时价格计算 MA120 位置
-    effective_close = current_price if current_price is not None and current_price > 0 else close_price
-
-    return {
-        "trade_date": trade_date,
-        "close_price": effective_close,
-        "ma120": ma120,
-        "ma120_position": (effective_close / ma120 - 1) * 100,
-    }
-
-
-def fetch_20day_low_bounce(code, today=None, current_price=None):
-    """获取最近收盘价相对于最近20个交易日盘中最低价的反弹幅度，使用腾讯前复权价格。
-
-    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线）。
-    current_price 若传入正数，则优先用作当前价格计算反弹幅度（盘中实时价格）。
-    """
-    market = "sh" if code.startswith("6") else "sz"
-    url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-    params = {
-        "param": f"{market}{code},day,,,25,qfq",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://gu.qq.com/",
-    }
-    _throttle_request()
-    response = requests.get(url, params=params, headers=headers, timeout=15)
-    response.raise_for_status()
-
-    payload = response.json()
-    stock_data = payload.get("data", {}).get(f"{market}{code}")
-    if not stock_data:
-        return None
-    klines = stock_data.get("qfqday") or stock_data.get("day")
-    if not klines or len(klines) < 20:
-        return None
-
     if today is not None:
         today_text = today.strftime("%Y-%m-%d") if hasattr(today, "strftime") else str(today)[:10]
         klines = [item for item in klines if str(item[0])[:10] < today_text]
@@ -379,107 +337,80 @@ def fetch_20day_low_bounce(code, today=None, current_price=None):
             continue
         # item format: [date, open, close, high, low, volume, ...]
         close_price = _to_float(item[2])
-        low_price = _to_float(item[4])
         if close_price is None or close_price <= 0:
-            continue
-        if low_price is None or low_price <= 0:
             continue
         trade_date = str(item[0])[:10]
         if not trade_date:
             continue
-        rows.append((trade_date, close_price, low_price))
+        rows.append((trade_date, close_price, _to_float(item[3]), _to_float(item[4])))
 
-    if len(rows) < 20:
-        return None
-
-    recent_20 = rows[-20:]
-    lowest_row = min(recent_20, key=lambda r: r[2])
-    lowest_trade_date, _, lowest_low = lowest_row
-    current_trade_date, current_close, _ = rows[-1]
-
-    if lowest_low <= 0:
-        return None
-
-    # 优先使用实时价格计算反弹幅度
-    effective_close = current_price if current_price is not None and current_price > 0 else current_close
-
-    return {
-        "trade_date": current_trade_date,
-        "close_price": effective_close,
-        "lowest_date": lowest_trade_date,
-        "lowest_low": lowest_low,
-        "bounce_position": (effective_close / lowest_low - 1) * 100,
-    }
+    return rows or None
 
 
-def fetch_20day_high_decline(code, today=None, current_price=None):
-    """获取最近收盘价相对于最近20个交易日盘中最高价的回落幅度，使用腾讯前复权价格。
+def compute_kline_metrics(rows, current_price=None):
+    """从升序日K行计算 MA120/20日反弹/20日回落，同份数据复用。
 
-    若 today 传入日期，则排除该日期及之后的K线（用于盘中排除当日未完成K线）。
-    current_price 若传入正数，则优先用作当前价格计算回落幅度（盘中实时价格）。
+    MA120取后120根收盘价，反弹取后25根盘中最低价，回落取后25根盘中最高价。
+    current_price 若传入正数，则优先用作当前价格计算三个位置（盘中实时价格）。
+    返回 {"ma120": {...}|None, "low20": {...}|None, "high20": {...}|None}，
+    数据不足的指标为 None，不影响其余指标。
     """
-    market = "sh" if code.startswith("6") else "sz"
-    url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-    params = {
-        "param": f"{market}{code},day,,,25,qfq",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://gu.qq.com/",
-    }
-    _throttle_request()
-    response = requests.get(url, params=params, headers=headers, timeout=15)
-    response.raise_for_status()
+    result = {"ma120": None, "low20": None, "high20": None}
+    if not rows:
+        return result
 
-    payload = response.json()
-    stock_data = payload.get("data", {}).get(f"{market}{code}")
-    if not stock_data:
+    # MA120：后120根收盘价
+    if len(rows) >= 120:
+        trade_date, close_price, _, _ = rows[-1]
+        ma120 = sum(row[1] for row in rows[-120:]) / 120
+        if ma120 > 0:
+            effective_close = current_price if current_price is not None and current_price > 0 else close_price
+            result["ma120"] = {
+                "trade_date": trade_date,
+                "close_price": effective_close,
+                "ma120": ma120,
+                "ma120_position": (effective_close / ma120 - 1) * 100,
+            }
+
+    # 反弹：后25根中最近20个交易日盘中最低价
+    low_rows = [row for row in rows if row[3] is not None and row[3] > 0]
+    if len(low_rows) >= 20:
+        lowest_row = min(low_rows[-20:], key=lambda r: r[3])
+        lowest_trade_date, _, _, lowest_low = lowest_row
+        current_trade_date, current_close, _, _ = low_rows[-1]
+        effective_close = current_price if current_price is not None and current_price > 0 else current_close
+        result["low20"] = {
+            "trade_date": current_trade_date,
+            "close_price": effective_close,
+            "lowest_date": lowest_trade_date,
+            "lowest_low": lowest_low,
+            "bounce_position": (effective_close / lowest_low - 1) * 100,
+        }
+
+    # 回落：后25根中最近20个交易日盘中最高价
+    high_rows = [row for row in rows if row[2] is not None and row[2] > 0]
+    if len(high_rows) >= 20:
+        highest_row = max(high_rows[-20:], key=lambda r: r[2])
+        highest_trade_date, _, highest_high, _ = highest_row
+        current_trade_date, current_close, _, _ = high_rows[-1]
+        effective_close = current_price if current_price is not None and current_price > 0 else current_close
+        result["high20"] = {
+            "trade_date": current_trade_date,
+            "close_price": effective_close,
+            "highest_date": highest_trade_date,
+            "highest_high": highest_high,
+            "decline_position": (effective_close / highest_high - 1) * 100,
+        }
+
+    return result
+
+
+def fetch_daily_kline_metrics(code, today=None, current_price=None):
+    """请求一次并计算 MA120/20日反弹/20日回落（请求+计算的便捷组合）。"""
+    rows = fetch_daily_kline_rows(code, today)
+    if rows is None:
         return None
-    klines = stock_data.get("qfqday") or stock_data.get("day")
-    if not klines or len(klines) < 20:
-        return None
-
-    if today is not None:
-        today_text = today.strftime("%Y-%m-%d") if hasattr(today, "strftime") else str(today)[:10]
-        klines = [item for item in klines if str(item[0])[:10] < today_text]
-
-    rows = []
-    for item in klines:
-        if len(item) < 4:
-            continue
-        # item format: [date, open, close, high, low, volume, ...]
-        close_price = _to_float(item[2])
-        high_price = _to_float(item[3])
-        if close_price is None or close_price <= 0:
-            continue
-        if high_price is None or high_price <= 0:
-            continue
-        trade_date = str(item[0])[:10]
-        if not trade_date:
-            continue
-        rows.append((trade_date, close_price, high_price))
-
-    if len(rows) < 20:
-        return None
-
-    recent_20 = rows[-20:]
-    highest_row = max(recent_20, key=lambda r: r[2])
-    highest_trade_date, _, highest_high = highest_row
-    current_trade_date, current_close, _ = rows[-1]
-
-    if highest_high <= 0:
-        return None
-
-    # 优先使用实时价格计算回落幅度
-    effective_close = current_price if current_price is not None and current_price > 0 else current_close
-
-    return {
-        "trade_date": current_trade_date,
-        "close_price": effective_close,
-        "highest_date": highest_trade_date,
-        "highest_high": highest_high,
-        "decline_position": (effective_close / highest_high - 1) * 100,
-    }
+    return compute_kline_metrics(rows, current_price)
 
 
 def _to_float(value):

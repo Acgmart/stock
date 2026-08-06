@@ -20,18 +20,19 @@ from instock.core.market_quotes import (
     _read_ma120_cache,
     _read_low20_cache,
     _read_high20_cache,
+    _read_latest_kline_closes,
     _is_ma120_cache_stale,
     _is_low20_cache_stale,
     _is_high20_cache_stale,
     _ma120_trade_signal,
-    _schedule_ma120_refresh,
-    _schedule_low20_refresh,
-    _schedule_high20_refresh,
+    _schedule_kline_refresh,
 )
 from instock.core.profile import (
     _get_cached_profile_rows,
-    _is_profile_cache_stale,
-    _schedule_profile_refresh,
+    _is_industry_cache_stale,
+    _is_market_cap_cache_stale,
+    _schedule_industry_refresh,
+    _schedule_market_cap_refresh,
 )
 from instock.core.dividend import (
     _get_cached_dividend_history,
@@ -78,6 +79,8 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 stock_codes = [code for code in stock_codes if code not in blocked_industry_stock_codes]
         price_by_code = _get_cached_price_rows(self.db, stock_codes, errors)
         profile_by_code = _get_cached_profile_rows(self.db, stock_codes)
+        # 昨日收盘价（隐藏）：K线缓存最新一根收盘（前复权），盘中为上一交易日、收盘后与现价一致
+        kline_latest_by_code = _read_latest_kline_closes(self.db, stock_codes)
         if blocked_industries:
             # 未缓存的股票：命中屏蔽行业的自动记录到缓存文件并屏蔽
             for code in stock_codes:
@@ -118,9 +121,14 @@ class HighDividendDataHandler(webBase.BaseHandler):
             code for code in stock_codes
             if _is_high20_cache_stale(high20_by_code.get(code), now)
         ]
-        stale_profile_codes = [
+        # 行业只抓一次不刷新；市值每周刷新
+        stale_industry_codes = [
             code for code in stock_codes
-            if _is_profile_cache_stale(profile_by_code.get(code), now)
+            if _is_industry_cache_stale(profile_by_code.get(code), now)
+        ]
+        stale_market_cap_codes = [
+            code for code in stock_codes
+            if _is_market_cap_cache_stale(profile_by_code.get(code), now)
         ]
         stale_dividend_codes = []
         stale_finance_codes = []
@@ -130,7 +138,8 @@ class HighDividendDataHandler(webBase.BaseHandler):
         for code in stock_codes:
             price_row = price_by_code.get(code)
             current_price = None if price_row is None else _to_float(price_row.get("current_price"))
-            pre_close_price = None if price_row is None else _to_float(price_row.get("pre_close_price"))
+            change_rate = None if price_row is None else _to_float(price_row.get("change_rate"))
+            pre_close_price = kline_latest_by_code.get(code)
             try:
                 history, dividend_changed, dividend_history_stale = _get_cached_dividend_history(self.db, code)
                 if dividend_history_stale:
@@ -172,7 +181,10 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 blocked_this_run_codes.add(code)
                 continue
             # 息增年为0（只需派息历史）：自动记录到 blocklist_dividendGrowthYearZero.txt 并屏蔽，不再读取缓存、不再刷新
-            if dividend_growth_years == 0 and history:
+            # 新上市无分红公司派息历史凑不出2个财年，息增年同样为0：
+            # 派息历史非空，或已确认检查过（缓存不旧）即为空，都视为息增年为0屏蔽；
+            # 尚未抓取到派息历史（缓存过期待抓）的不屏蔽，避免误杀。
+            if dividend_growth_years == 0 and (history or not dividend_history_stale):
                 blocklist.add_blocked(blocklist.GROWTH_YEAR_ZERO_FILE, code, stock_names.get(code, ""))
                 blocked_this_run_codes.add(code)
                 continue
@@ -234,7 +246,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "ma120": None if not ma120_row else _to_float(ma120_row.get("ma120")),
                 "ma120_position": ma120_position,
                 "ma120_signal": _ma120_trade_signal(
-                    current_price,
+                    change_rate,
                     pre_close_price,
                     ma120_position,
                     None if not ma120_row else _to_float(ma120_row.get("ma120"))),
@@ -250,6 +262,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "high20_decline": high20_decline,
                 "price_date": "" if price_row is None else _date_text(price_row.get("price_date")),
                 "current_price": current_price,
+                "change_rate": change_rate,
                 "market_cap": None if profile_by_code.get(code) is None else _to_float(profile_by_code[code].get("market_cap")),
                 "dividend_year": dividend_year,
                 "dividend_per_10": round(dividend_per_10, 4),
@@ -264,23 +277,26 @@ class HighDividendDataHandler(webBase.BaseHandler):
         if blocked_this_run_codes:
             for stale_list in (
                 stale_ma120_codes, stale_low20_codes, stale_high20_codes,
-                stale_profile_codes, stale_finance_codes, stale_dividend_codes,
+                stale_industry_codes, stale_market_cap_codes,
+                stale_finance_codes, stale_dividend_codes,
             ):
                 stale_list[:] = [code for code in stale_list if code not in blocked_this_run_codes]
 
-        # 优先请求屏蔽文件相关数据（行业→收益→股息率/息增年），尽快完成屏蔽
-        # 其余数据（现金流、MA120、20日高低点）等屏蔽相关数据完成后才请求，屏蔽的股票不再请求
+        # 优先请求屏蔽相关数据（行业→收益→股息率/息增年），尽快完成屏蔽
+        # 其余数据（市值、现金流、MA120、20日高低点）等屏蔽相关数据完成后才请求，屏蔽的股票不再请求
         priority_threads = [t for t in (
-            _schedule_profile_refresh(stale_profile_codes),
+            _schedule_industry_refresh(stale_industry_codes),
             _schedule_finance_report_refresh(stale_finance_codes),
             _schedule_dividend_history_refresh(stale_dividend_codes),
         ) if t]
 
         def _schedule_tail_refreshes():
+            _schedule_market_cap_refresh(stale_market_cap_codes)
             _schedule_cashflow_refresh(stale_cashflow_codes)
-            _schedule_ma120_refresh(stale_ma120_codes)
-            _schedule_low20_refresh(stale_low20_codes)
-            _schedule_high20_refresh(stale_high20_codes)
+            # MA120/反弹/回落合并在一次K线请求中刷新
+            stale_kline_codes = list(dict.fromkeys(
+                stale_ma120_codes + stale_low20_codes + stale_high20_codes))
+            _schedule_kline_refresh(stale_kline_codes)
 
         if priority_threads:
             def _run_priority_then_tail():
@@ -296,14 +312,14 @@ class HighDividendDataHandler(webBase.BaseHandler):
             "stock_count": len(rows),
             "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             "cache_policy": {
-                "price": "盘中最多每30分钟刷新一次，盘后保持收盘价；外部请求间隔至少2秒",
-                "profile": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日数据；外部请求间隔至少2秒",
-                "ma120": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据；外部请求间隔至少2秒",
-                "low20": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据；外部请求间隔至少2秒",
-                "high20": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据；外部请求间隔至少2秒",
-                "dividend_history": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
-                "finance_report": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次；外部请求间隔至少2秒",
-                "cashflow": "页面请求只读缓存；窄口径FCF只取最新年报，金融行业不抓取；年报季交易日检查，非年报季最多7天一次；外部请求间隔至少2秒",
+                "price": "盘中每5分钟刷新一次（与前端自动刷新同步），盘后保持收盘价",
+                "profile": "页面请求只读缓存；行业只抓一次不刷新，市值取每周最后一个交易日收盘数据、周五收盘后刷新，无缓存立即抓取",
+                "ma120": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据",
+                "low20": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据",
+                "high20": "页面请求只读缓存；盘中可刷新（使用前一交易日收盘数据），下午3点后刷新当日收盘数据",
+                "dividend_history": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次",
+                "finance_report": "页面请求只读缓存；交易日每天8点后检查一次，16点至23点最多每4小时复查一次",
+                "cashflow": "页面请求只读缓存；窄口径FCF只取最新年报，金融行业不抓取；年报季交易日检查，非年报季最多7天一次",
             },
             "errors": errors,
             "data": rows,

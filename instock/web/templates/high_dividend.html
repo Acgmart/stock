@@ -265,7 +265,7 @@
                     <col style="width: 72px;"><!-- 股息率 -->
                     <col style="width: 72px;"><!-- 息增年 -->
                     <col style="width: 88px;"><!-- FCF/股息 -->
-                    <col style="width: 88px;"><!-- FCF/股价 -->
+                    <col style="width: 88px;"><!-- FCF/现价 -->
                     <col style="width: 72px;"><!-- MA120 -->
                     <col style="width: 64px;"><!-- 反弹 -->
                     <col style="width: 64px;"><!-- 回落 -->
@@ -280,7 +280,7 @@
                         <th class="number-cell sortable-header" data-sort-key="dividend_yield">股息率<i class="fa fa-sort sort-icon"></i></th>
                         <th class="number-cell sortable-header" data-sort-key="dividend_growth_years">息增年<i class="fa fa-sort sort-icon"></i></th>
                         <th class="number-cell sortable-header" data-sort-key="fcf_dividend">FCF/股息<i class="fa fa-sort sort-icon"></i></th>
-                        <th class="number-cell sortable-header" data-sort-key="fcf_price">FCF/股价<i class="fa fa-sort sort-icon"></i></th>
+                        <th class="number-cell sortable-header" data-sort-key="fcf_price">FCF/现价<i class="fa fa-sort sort-icon"></i></th>
                         <th class="number-cell sortable-header" data-sort-key="ma120_position">MA120<i class="fa fa-sort sort-icon"></i></th>
                         <th class="number-cell sortable-header" data-sort-key="low20_bounce">反弹<i class="fa fa-sort sort-icon"></i></th>
                         <th class="number-cell sortable-header" data-sort-key="high20_decline">回落<i class="fa fa-sort sort-icon"></i></th>
@@ -315,6 +315,13 @@
     function formatNumber(value, digits) {
         if (value === null || value === undefined || Number.isNaN(Number(value))) {
             return "--";
+        }
+        return Number(value).toFixed(digits);
+    }
+
+    function formatBlankNumber(value, digits) {
+        if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) {
+            return "";
         }
         return Number(value).toFixed(digits);
     }
@@ -653,12 +660,12 @@
                 formatBlankPercent(row.deducted_profit_growth, 1),
                 '</td>',
                 '<td class="number-cell yield-cell" title="',
-                escapeHtml(row.dividend_per_share != null ? (row.dividend_year != null ? row.dividend_year + '年度 ' : '') + '派息 ' + formatNumber(row.dividend_per_share, 2) + ' / 股价 ' + formatNumber(row.current_price, 2) : ''),
+                escapeHtml(row.dividend_per_share != null ? (row.dividend_year != null ? row.dividend_year + '年度 ' : '') + '派息 ' + formatNumber(row.dividend_per_share, 2) + ' / ' + (row.price_date ? row.price_date + ' 现价 ' : '现价 ') + formatNumber(row.current_price, 2) : ''),
                 '">',
-                formatPercent(row.dividend_yield, 1),
+                row.dividend_yield ? formatBlankPercent(row.dividend_yield, 1) : '',
                 '</td>',
                 '<td class="number-cell">',
-                formatNumber(row.dividend_growth_years, 0),
+                row.dividend_growth_years ? formatBlankNumber(row.dividend_growth_years, 0) : '',
                 '</td>',
                 '<td class="number-cell fcf-dividend-cell">',
                 formatBlankPercent(row.fcf_dividend === null || row.fcf_dividend === undefined ? null : row.fcf_dividend * 100, 0),
@@ -669,17 +676,17 @@
                 '<td class="number-cell',
                 row.ma120_signal === 'buy' ? ' ma120-buy-cell' : (row.ma120_signal === 'sell' ? ' ma120-sell-cell' : ''),
                 '" title="',
-                escapeHtml(row.ma120_trade_date ? row.ma120_trade_date + ' 现价 ' + formatNumber(row.ma120_close_price, 2) + ' / MA120 ' + formatNumber(row.ma120, 2) : ''),
+                escapeHtml((row.price_date || row.ma120_trade_date) ? (row.price_date || row.ma120_trade_date) + ' 现价 ' + formatNumber(row.ma120_close_price, 2) + ' / MA120 ' + formatNumber(row.ma120, 2) : ''),
                 '">',
                 formatBlankPercent(row.ma120_position, 1),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml(row.low20_trade_date ? row.low20_trade_date + ' 现价 ' + formatNumber(row.low20_close_price, 2) + ' / 近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
+                escapeHtml((row.price_date || row.low20_trade_date) ? (row.price_date || row.low20_trade_date) + ' 现价 ' + formatNumber(row.low20_close_price, 2) + ' / 近20日盘中最低 ' + formatNumber(row.low20_lowest_low, 2) + '（' + row.low20_lowest_date + '）' : ''),
                 '">',
                 formatBlankPercent(row.low20_bounce, 1),
                 '</td>',
                 '<td class="number-cell" title="',
-                escapeHtml(row.high20_trade_date ? row.high20_trade_date + ' 现价 ' + formatNumber(row.high20_close_price, 2) + ' / 近20日盘中最高 ' + formatNumber(row.high20_highest_high, 2) + '（' + row.high20_highest_date + '）' : ''),
+                escapeHtml((row.price_date || row.high20_trade_date) ? (row.price_date || row.high20_trade_date) + ' 现价 ' + formatNumber(row.high20_close_price, 2) + ' / 近20日盘中最高 ' + formatNumber(row.high20_highest_high, 2) + '（' + row.high20_highest_date + '）' : ''),
                 '">',
                 formatBlankPercent(row.high20_decline, 1),
                 '</td>',
@@ -695,9 +702,19 @@
         updateSortIcons();
     }
 
+    let highDividendListLoading = false;
+
     function loadHighDividendList() {
+        // 上一次请求未完成时跳过本轮，避免并发请求导致外部流量翻倍
+        if (highDividendListLoading) {
+            return;
+        }
+        highDividendListLoading = true;
         const tbody = document.getElementById("dividendRows");
-        tbody.innerHTML = '<tr><td class="empty-state" colspan="' + tableColumnCount() + '">加载中...</td></tr>';
+        // 首次加载（表格为空）时显示加载中；定时静默刷新不打断现有数据
+        if (!tbody.querySelector("td[data-code]")) {
+            tbody.innerHTML = '<tr><td class="empty-state" colspan="' + tableColumnCount() + '">加载中...</td></tr>';
+        }
 
         $.getJSON("/instock/high_dividend/api")
             .done(function(payload) {
@@ -712,21 +729,27 @@
                 }
             })
             .fail(function(xhr) {
-                let message = xhr.statusText || xhr.status;
-                if (xhr.responseJSON && xhr.responseJSON.message) {
-                    message = xhr.responseJSON.message;
+                if (tbody.querySelector("td[data-code]")) {
+                    // 已有数据时静默失败，保留现有数据
+                    console.warn("刷新失败，保留现有数据：" + (xhr.statusText || xhr.status));
+                } else {
+                    let message = xhr.statusText || xhr.status;
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        message = xhr.responseJSON.message;
+                    }
+                    tbody.innerHTML = '<tr><td class="error-state" colspan="' + tableColumnCount() + '">数据读取失败：' + escapeHtml(message) + '</td></tr>';
                 }
-                tbody.innerHTML = '<tr><td class="error-state" colspan="' + tableColumnCount() + '">数据读取失败：' + escapeHtml(message) + '</td></tr>';
+            })
+            .always(function() {
+                highDividendListLoading = false;
             });
     }
 
-    function startAfterCloseDividendRefresh() {
+    function startPeriodicRefresh() {
+        // 前端打开时每5分钟刷新一次，未打开前端时无任何请求
         window.setInterval(function() {
-            const hour = new Date().getHours();
-            if (hour >= 16 && hour <= 23) {
-                loadHighDividendList();
-            }
-        }, 60 * 60 * 1000);
+            loadHighDividendList();
+        }, 5 * 60 * 1000);
     }
 
     $(document).ready(function() {
@@ -772,7 +795,7 @@
         loadWatchList().done(function() {
             loadHighDividendList();
         });
-        startAfterCloseDividendRefresh();
+        startPeriodicRefresh();
     });
 </script>
 {% end %}

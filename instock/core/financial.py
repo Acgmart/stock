@@ -34,25 +34,48 @@ _CASHFLOW_REFRESH_LOCK = threading.Lock()
 _CASHFLOW_REFRESH_RUNNING = False
 
 
-def _fetch_finance_report_history(code):
-    _throttle_external_request()
-    url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
-    params = {
-        "reportName": "RPT_F10_FINANCE_MAINFINADATA",
-        "columns": "ALL",
-        "quoteColumns": "",
-        "filter": f'(SECURITY_CODE="{code}")',
-        "pageNumber": "1",
-        "pageSize": "20",
-        "sortTypes": "-1",
-        "sortColumns": "REPORT_DATE",
-        "source": "HSF10",
-    }
-    response = _DIVIDEND_FETCHER.make_request(url, params=params, timeout=15)
-    payload = response.json()
-    if not payload.get("success") or not payload.get("result"):
-        return []
-    return payload["result"].get("data") or []
+_FINANCE_BATCH_SIZE = 20
+_FINANCE_BATCH_PAGE_SIZE = 500
+
+
+def _fetch_finance_reports_batch(codes):
+    """批量抓取扣非/收益（RPT_F10_FINANCE_MAINFINADATA），每批20只一次请求，返回 {code: history}。
+
+    财报历史每股最多20条（pageSize=20），20只一批、pageSize=500 不截断。
+    批次抓取失败时该批股票不出现在结果中（保持原缓存，下次重试）。
+    """
+    result = {}
+    if not codes:
+        return result
+    for i in range(0, len(codes), _FINANCE_BATCH_SIZE):
+        batch = codes[i:i + _FINANCE_BATCH_SIZE]
+        code_list = '","'.join(batch)
+        _throttle_external_request()
+        url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
+        params = {
+            "reportName": "RPT_F10_FINANCE_MAINFINADATA",
+            "columns": "ALL",
+            "quoteColumns": "",
+            "filter": f'(SECURITY_CODE in ("{code_list}"))',
+            "pageNumber": "1",
+            "pageSize": str(_FINANCE_BATCH_PAGE_SIZE),
+            "sortTypes": "-1",
+            "sortColumns": "REPORT_DATE",
+            "source": "HSF10",
+        }
+        try:
+            response = _DIVIDEND_FETCHER.make_request(url, params=params, timeout=15)
+            payload = response.json()
+            if payload.get("success") and payload.get("result"):
+                for code in batch:
+                    result.setdefault(code, [])
+                for row in payload["result"].get("data") or []:
+                    code = row.get("SECURITY_CODE")
+                    if code in batch:
+                        result[code].append(row)
+        except Exception:
+            continue
+    return result
 
 
 def _finance_report_name(history):
@@ -131,13 +154,21 @@ def _refresh_finance_reports(stock_codes):
     try:
         db = mysql.Connection(**mdb.MYSQL_CONN)
         _ensure_cache_tables(db)
+        now = _now()
+        # 先过滤过期股票，再批量抓取（每批20只）
+        need_codes = []
         for code in stock_codes:
-            now = _now()
             cache_row, history = _read_finance_report_cache(db, code)
-            if not _is_finance_report_cache_stale(cache_row, history, now):
-                continue
-
-            fresh_history = _fetch_finance_report_history(code)
+            if _is_finance_report_cache_stale(cache_row, history, now):
+                need_codes.append(code)
+        if not need_codes:
+            return
+        histories = _fetch_finance_reports_batch(need_codes)
+        for code in need_codes:
+            if code not in histories:
+                continue  # 所在批次抓取失败，保持原缓存，下次重试
+            fresh_history = histories[code]
+            cache_row, history = _read_finance_report_cache(db, code)
             old_growth = _latest_finance_report_deducted_growth(history)
             fresh_growth = _latest_finance_report_deducted_growth(fresh_history)
             changed = bool(history) and fresh_growth is not None and fresh_growth != old_growth
@@ -214,25 +245,48 @@ def _get_cached_latest_finance_report(db, code):
     }, is_stale
 
 
-def _fetch_cashflow_history(code):
-    _throttle_external_request()
-    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-    params = {
-        "reportName": "RPT_DMSK_FN_CASHFLOW",
-        "columns": "ALL",
-        "filter": f'(SECURITY_CODE="{code}")',
-        "pageNumber": "1",
-        "pageSize": "20",
-        "sortTypes": "-1",
-        "sortColumns": "REPORT_DATE",
-        "source": "WEB",
-        "client": "WEB",
-    }
-    response = _DIVIDEND_FETCHER.make_request(url, params=params, timeout=15)
-    payload = response.json()
-    if not payload.get("success") or not payload.get("result"):
-        return []
-    return payload["result"].get("data") or []
+_CASHFLOW_BATCH_SIZE = 20
+_CASHFLOW_BATCH_PAGE_SIZE = 500
+
+
+def _fetch_cashflows_batch(codes):
+    """批量抓取FCF现金流（RPT_DMSK_FN_CASHFLOW），每批20只一次请求，返回 {code: history}。
+
+    现金流历史每股最多20条（pageSize=20），20只一批、pageSize=500 不截断。
+    批次抓取失败时该批股票不出现在结果中（保持原缓存，下次重试）。
+    """
+    result = {}
+    if not codes:
+        return result
+    for i in range(0, len(codes), _CASHFLOW_BATCH_SIZE):
+        batch = codes[i:i + _CASHFLOW_BATCH_SIZE]
+        code_list = '","'.join(batch)
+        _throttle_external_request()
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+        params = {
+            "reportName": "RPT_DMSK_FN_CASHFLOW",
+            "columns": "ALL",
+            "filter": f'(SECURITY_CODE in ("{code_list}"))',
+            "pageNumber": "1",
+            "pageSize": str(_CASHFLOW_BATCH_PAGE_SIZE),
+            "sortTypes": "-1",
+            "sortColumns": "REPORT_DATE",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        try:
+            response = _DIVIDEND_FETCHER.make_request(url, params=params, timeout=15)
+            payload = response.json()
+            if payload.get("success") and payload.get("result"):
+                for code in batch:
+                    result.setdefault(code, [])
+                for row in payload["result"].get("data") or []:
+                    code = row.get("SECURITY_CODE")
+                    if code in batch:
+                        result[code].append(row)
+        except Exception:
+            continue
+    return result
 
 
 def _read_cashflow_cache(db, code):
@@ -290,14 +344,20 @@ def _refresh_cashflows(stock_codes):
     try:
         db = mysql.Connection(**mdb.MYSQL_CONN)
         _ensure_cache_tables(db)
+        now = _now()
+        # 先过滤过期股票，再批量抓取（每批20只）
+        need_codes = []
         for code in stock_codes:
-            now = _now()
             cache_row, history = _read_cashflow_cache(db, code)
-            if not _is_cashflow_cache_stale(cache_row, history, now):
-                continue
-
-            fresh_history = _fetch_cashflow_history(code)
-            _write_cashflow_cache(db, code, fresh_history, now)
+            if _is_cashflow_cache_stale(cache_row, history, now):
+                need_codes.append(code)
+        if not need_codes:
+            return
+        histories = _fetch_cashflows_batch(need_codes)
+        for code in need_codes:
+            if code not in histories:
+                continue  # 所在批次抓取失败，保持原缓存，下次重试
+            _write_cashflow_cache(db, code, histories[code], now)
     except Exception as error:
         print(f"financial._refresh_cashflows处理异常：{error}")
     finally:

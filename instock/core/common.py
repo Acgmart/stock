@@ -28,6 +28,7 @@ _CASHFLOW_CACHE_TABLE = "cn_high_dividend_cashflow_cache"
 _MA120_CACHE_TABLE = "cn_high_dividend_ma120_cache"
 _LOW20_CACHE_TABLE = "cn_high_dividend_low20_cache"
 _HIGH20_CACHE_TABLE = "cn_high_dividend_high20_cache"
+_KLINE_CACHE_TABLE = "cn_high_dividend_kline_cache"
 _PROFILE_CACHE_TABLE = "cn_high_dividend_profile_cache"
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _DIVIDEND_REFRESH_HOUR = 8
@@ -99,6 +100,7 @@ def _ensure_cache_tables(db):
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
         db.execute(f"ALTER TABLE `{_PRICE_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `pre_close_price` decimal(12,4) DEFAULT NULL")
+        db.execute(f"ALTER TABLE `{_PRICE_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `change_rate` decimal(12,4) DEFAULT NULL")
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_PROFILE_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
@@ -109,6 +111,8 @@ def _ensure_cache_tables(db):
                 INDEX `idx_fetched_at` (`fetched_at`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
+        db.execute(f"ALTER TABLE `{_PROFILE_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `industry_fetched_at` datetime DEFAULT NULL")
+        db.execute(f"ALTER TABLE `{_PROFILE_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `market_cap_fetched_at` datetime DEFAULT NULL")
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS `{_DIVIDEND_HISTORY_CACHE_TABLE}` (
                 `code` varchar(6) NOT NULL,
@@ -198,6 +202,16 @@ def _ensure_cache_tables(db):
         db.execute(f"ALTER TABLE `{_HIGH20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `highest_date` date DEFAULT NULL")
         db.execute(f"ALTER TABLE `{_HIGH20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `highest_high` decimal(12,4) DEFAULT NULL")
         db.execute(f"ALTER TABLE `{_HIGH20_CACHE_TABLE}` ADD COLUMN IF NOT EXISTS `decline_position` decimal(12,4) DEFAULT NULL")
+        db.execute(f"""
+            CREATE TABLE IF NOT EXISTS `{_KLINE_CACHE_TABLE}` (
+                `code` varchar(6) NOT NULL,
+                `trade_date` date NOT NULL,
+                `close_price` decimal(12,4) DEFAULT NULL,
+                `high_price` decimal(12,4) DEFAULT NULL,
+                `low_price` decimal(12,4) DEFAULT NULL,
+                PRIMARY KEY (`code`, `trade_date`)
+            ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+        """)
         _CACHE_TABLE_READY = True
 
 

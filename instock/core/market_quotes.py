@@ -7,9 +7,11 @@ import threading
 import instock.lib.database as mdb
 import instock.lib.mysql as mysql
 import instock.core.stocklist as stocklist
+import instock.core.dividend as dividend
 from instock.core.common import (
     _to_float,
     _now,
+    _date_text,
     _market_phase,
     _previous_trading_day,
     _ensure_cache_tables,
@@ -17,21 +19,16 @@ from instock.core.common import (
     _MA120_CACHE_TABLE,
     _LOW20_CACHE_TABLE,
     _HIGH20_CACHE_TABLE,
+    _KLINE_CACHE_TABLE,
 )
 
 __author__ = 'myh '
 __date__ = '2026/8/6 '
 
-_PRICE_REFRESH_MINUTES = 30
-_MA120_REFRESH_LOCK = threading.Lock()
-_MA120_REFRESH_RUNNING = False
-_MA120_REFRESH_ATTEMPTS = {}
-_LOW20_REFRESH_LOCK = threading.Lock()
-_LOW20_REFRESH_RUNNING = False
-_LOW20_REFRESH_ATTEMPTS = {}
-_HIGH20_REFRESH_LOCK = threading.Lock()
-_HIGH20_REFRESH_RUNNING = False
-_HIGH20_REFRESH_ATTEMPTS = {}
+_PRICE_REFRESH_MINUTES = 5
+_KLINE_REFRESH_LOCK = threading.Lock()
+_KLINE_REFRESH_RUNNING = False
+_KLINE_REFRESH_ATTEMPTS = {}
 
 
 def _is_price_cache_stale(cached_rows, stock_codes, now):
@@ -58,7 +55,7 @@ def _read_price_cache(db, stock_codes):
         return []
     placeholders = ",".join(["%s"] * len(stock_codes))
     return db.query(f"""
-        SELECT `code`, `name`, `price_date`, `current_price`, `pre_close_price`, `fetched_at`, `market_phase`
+        SELECT `code`, `name`, `price_date`, `current_price`, `pre_close_price`, `change_rate`, `fetched_at`, `market_phase`
         FROM `{_PRICE_CACHE_TABLE}`
         WHERE `code` IN ({placeholders})
     """, *stock_codes)
@@ -69,17 +66,19 @@ def _write_price_cache(db, price_data, now):
     for row in price_data:
         current_price = _to_float(row.get("new_price"))
         pre_close_price = _to_float(row.get("pre_close_price"))
+        change_rate = _to_float(row.get("change_rate"))
         if current_price is None or current_price <= 0:
             current_price = pre_close_price
         db.execute(f"""
             INSERT INTO `{_PRICE_CACHE_TABLE}`
-                (`code`, `name`, `price_date`, `current_price`, `pre_close_price`, `fetched_at`, `market_phase`)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (`code`, `name`, `price_date`, `current_price`, `pre_close_price`, `change_rate`, `fetched_at`, `market_phase`)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 `name` = VALUES(`name`),
                 `price_date` = VALUES(`price_date`),
                 `current_price` = VALUES(`current_price`),
                 `pre_close_price` = VALUES(`pre_close_price`),
+                `change_rate` = VALUES(`change_rate`),
                 `fetched_at` = VALUES(`fetched_at`),
                 `market_phase` = VALUES(`market_phase`)
         """,
@@ -88,12 +87,13 @@ def _write_price_cache(db, price_data, now):
                    row.get("date"),
                    current_price,
                    pre_close_price,
+                   change_rate,
                    now.strftime("%Y-%m-%d %H:%M:%S"),
                    phase)
 
 
 def _sync_indicator_cache_for_prices(db, stock_codes, now):
-    """用最新股价同步更新 MA120/反弹/回落缓存中的 close_price 和百分比值。"""
+    """用现价同步更新 MA120/反弹/回落缓存中的 close_price 和百分比值。"""
     price_rows = _read_price_cache(db, stock_codes)
     price_by_code = {row["code"]: _to_float(row.get("current_price")) for row in price_rows}
 
@@ -185,23 +185,25 @@ def _ma120_stage(position):
     return int(position // _MA120_STAGE_PERCENT)
 
 
-def _ma120_trade_signal(current_price, pre_close_price, ma120_position, ma120):
+def _ma120_trade_signal(change_rate, pre_close_price, ma120_position, ma120):
     """判断 MA120 位置的买卖点信号。
 
-    以 MA120 相对位置每 10% 为一个阶段，股价跨越阶段边界时触发提示：
-    买点：股价相对昨日收盘价下跌、最新位置位于 0% 以下，且从更高阶段跨入更低阶段。
-    卖点：股价相对昨日收盘价上涨、最新位置位于 0% 以上，且从更低阶段跨入更高阶段。
+    以 MA120 相对位置每 10% 为一个阶段，现价跨越阶段边界时触发提示：
+    买点：涨跌幅为负、最新位置位于 0% 以下，且从更高阶段跨入更低阶段。
+    卖点：涨跌幅为正、最新位置位于 0% 以上，且从更低阶段跨入更高阶段。
+    涨跌幅来自行情接口，收盘后仍有效（收盘后昨收与现价重合，无法再用现价比较判断涨跌）。
+    昨日阶段位置用昨日收盘价（K线缓存最新一根，前复权同口径）计算。
     返回 "buy"、"sell" 或空字符串。
     """
-    if current_price is None or pre_close_price is None or pre_close_price <= 0:
+    if change_rate is None or pre_close_price is None or pre_close_price <= 0:
         return ""
     if ma120_position is None or ma120 is None or ma120 <= 0:
         return ""
     prev_position = (pre_close_price / ma120 - 1) * 100
     stage_diff = _ma120_stage(prev_position) - _ma120_stage(ma120_position)
-    if current_price < pre_close_price and ma120_position < 0 and stage_diff > 0:
+    if change_rate < 0 and ma120_position < 0 and stage_diff > 0:
         return "buy"
-    if current_price > pre_close_price and ma120_position > 0 and stage_diff < 0:
+    if change_rate > 0 and ma120_position > 0 and stage_diff < 0:
         return "sell"
     return ""
 
@@ -224,7 +226,7 @@ def _is_ma120_cache_stale(cache_row, now):
     return fetched_at.date() < now.date()
 
 
-def _ma120_refresh_window(now):
+def _kline_refresh_window(now):
     phase = _market_phase(now)
     if phase == "before_open":
         phase = "intraday"
@@ -251,8 +253,94 @@ def _write_ma120_cache(db, code, ma120_row, now):
                now.strftime("%Y-%m-%d %H:%M:%S"))
 
 
-def _refresh_ma120_positions(stock_codes):
-    global _MA120_REFRESH_RUNNING
+def _expected_kline_date(now):
+    """K线缓存应包含的最晚已完成交易日（YYYY-MM-DD 字符串）。
+
+    工作日收盘后：当天K线已完成，期望今天；
+    盘中/盘前/周末：期望最近一个交易日（跨周末回到周五）。
+    """
+    phase = _market_phase(now)
+    if phase == "after_close":
+        return now.date().isoformat()
+    return _previous_trading_day(now.date()).isoformat()
+
+
+def _read_kline_cache(db, code):
+    """读取该股票最近125根日K，返回与接口一致的升序 [(trade_date, close, high, low), ...]。"""
+    rows = db.query(f"""
+        SELECT `trade_date`, `close_price`, `high_price`, `low_price`
+        FROM `{_KLINE_CACHE_TABLE}`
+        WHERE `code` = %s
+        ORDER BY `trade_date` DESC
+        LIMIT 125
+    """, code)
+    return [(str(row["trade_date"])[:10],
+             _to_float(row.get("close_price")),
+             _to_float(row.get("high_price")),
+             _to_float(row.get("low_price")))
+            for row in reversed(rows)]
+
+
+def _write_kline_cache(db, code, rows):
+    """覆盖写入该股票K线缓存，最多125根，多余的直接删除。"""
+    db.execute(f"DELETE FROM `{_KLINE_CACHE_TABLE}` WHERE `code` = %s", code)
+    if not rows:
+        return
+    placeholders = ",".join(["(%s, %s, %s, %s, %s)"] * len(rows))
+    values = [v for row in rows for v in (code, row[0], row[1], row[2], row[3])]
+    db.execute(f"""
+        INSERT INTO `{_KLINE_CACHE_TABLE}`
+            (`code`, `trade_date`, `close_price`, `high_price`, `low_price`)
+        VALUES {placeholders}
+    """, *values)
+
+
+def _read_latest_kline_closes(db, stock_codes):
+    """读取每股K线缓存最新一根的收盘价（前复权），作为昨日收盘价（隐藏）。
+
+    盘中最新一根为上一交易日收盘，收盘后为当天收盘（与现价一致）。
+    """
+    if not stock_codes:
+        return {}
+    placeholders = ",".join(["%s"] * len(stock_codes))
+    rows = db.query(f"""
+        SELECT k.`code`, k.`close_price`
+        FROM `{_KLINE_CACHE_TABLE}` k
+        JOIN (
+            SELECT `code`, MAX(`trade_date`) AS max_date
+            FROM `{_KLINE_CACHE_TABLE}`
+            WHERE `code` IN ({placeholders})
+            GROUP BY `code`
+        ) m ON k.`code` = m.`code` AND k.`trade_date` = m.max_date
+    """, *stock_codes)
+    return {row["code"]: _to_float(row.get("close_price")) for row in rows}
+
+
+def _has_pending_ex_dividend(db, code, cached_max_date):
+    """缓存最新一根是除息日时，前复权价可能抓取于除息调整生效前，需要重新请求。
+
+    前复权（qfq）价格在除息日会整体调整，日期判断无法发现，
+    借助派息缓存的除息日（EX_DIVIDEND_DATE）强制更新：
+    除息日 >= 缓存最新交易日 即重新请求125根。
+    """
+    try:
+        history, _, _ = dividend._get_cached_dividend_history(db, code)
+    except Exception:
+        return False
+    for item in history or []:
+        ex_date = _date_text(item.get("EX_DIVIDEND_DATE"))
+        if ex_date and ex_date >= cached_max_date:
+            return True
+    return False
+
+
+def _refresh_kline_metrics(stock_codes):
+    """刷新 MA120/反弹/回落：K线缓存已含最新交易日则直接用缓存计算，否则重新请求覆盖。
+
+    K线缓存为空或缺少最新交易日K线（如容器停机未更新）时请求一次125根并覆盖；
+    缓存已含最新交易日时不再请求外部接口，仅用缓存重算并写入过期的指标缓存。
+    """
+    global _KLINE_REFRESH_RUNNING
     db = None
     try:
         db = mysql.Connection(**mdb.MYSQL_CONN)
@@ -261,50 +349,67 @@ def _refresh_ma120_positions(stock_codes):
         phase = _market_phase(now)
         # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
         effective_today = now.date() if phase in ("intraday", "before_open") else None
-        # 读取实时价格，优先用于 MA120 位置计算
+        expected_date = _expected_kline_date(now)
+        # 读取实时价格，优先用于位置计算
         price_rows = _read_price_cache(db, stock_codes)
         price_by_code = {row["code"]: row for row in price_rows}
         for code in stock_codes:
-            cache_row = _read_ma120_cache(db, [code]).get(code)
-            if not _is_ma120_cache_stale(cache_row, now):
+            ma120_row = _read_ma120_cache(db, [code]).get(code)
+            low20_row = _read_low20_cache(db, [code]).get(code)
+            high20_row = _read_high20_cache(db, [code]).get(code)
+            if not (_is_ma120_cache_stale(ma120_row, now)
+                    or _is_low20_cache_stale(low20_row, now)
+                    or _is_high20_cache_stale(high20_row, now)):
                 continue
 
             price_row = price_by_code.get(code)
             current_price = _to_float(price_row.get("current_price")) if price_row else None
-            ma120_row = stocklist.fetch_daily_ma120_position(code, today=effective_today, current_price=current_price)
-            if ma120_row is not None:
-                _write_ma120_cache(db, code, ma120_row, now)
+
+            rows = _read_kline_cache(db, code)
+            if not rows or rows[-1][0] < expected_date or _has_pending_ex_dividend(db, code, rows[-1][0]):
+                rows = stocklist.fetch_daily_kline_rows(code, today=effective_today)
+                if rows is None or not rows:
+                    continue
+                _write_kline_cache(db, code, rows)
+
+            metrics = stocklist.compute_kline_metrics(rows, current_price)
+            if metrics.get("ma120") is not None and _is_ma120_cache_stale(ma120_row, now):
+                _write_ma120_cache(db, code, metrics["ma120"], now)
+            if metrics.get("low20") is not None and _is_low20_cache_stale(low20_row, now):
+                _write_low20_cache(db, code, metrics["low20"], now)
+            if metrics.get("high20") is not None and _is_high20_cache_stale(high20_row, now):
+                _write_high20_cache(db, code, metrics["high20"], now)
     except Exception as error:
-        print(f"market_quotes._refresh_ma120_positions处理异常：{error}")
+        print(f"market_quotes._refresh_kline_metrics处理异常：{error}")
     finally:
         if db is not None:
             db.close()
-        with _MA120_REFRESH_LOCK:
-            _MA120_REFRESH_RUNNING = False
+        with _KLINE_REFRESH_LOCK:
+            _KLINE_REFRESH_RUNNING = False
 
 
-def _schedule_ma120_refresh(stock_codes):
-    global _MA120_REFRESH_RUNNING
+def _schedule_kline_refresh(stock_codes):
+    global _KLINE_REFRESH_RUNNING
     stock_codes = tuple(dict.fromkeys(stock_codes))
     if not stock_codes:
         return
-    window = _ma120_refresh_window(_now())
+    window = _kline_refresh_window(_now())
     if window is None:
         return
-    with _MA120_REFRESH_LOCK:
-        if _MA120_REFRESH_RUNNING:
+    with _KLINE_REFRESH_LOCK:
+        if _KLINE_REFRESH_RUNNING:
             return
         stock_codes = tuple(
             code for code in stock_codes
-            if _MA120_REFRESH_ATTEMPTS.get(code) != window
+            if _KLINE_REFRESH_ATTEMPTS.get(code) != window
         )
         if not stock_codes:
             return
         for code in stock_codes:
-            _MA120_REFRESH_ATTEMPTS[code] = window
-        _MA120_REFRESH_RUNNING = True
+            _KLINE_REFRESH_ATTEMPTS[code] = window
+        _KLINE_REFRESH_RUNNING = True
 
-    thread = threading.Thread(target=_refresh_ma120_positions, args=(stock_codes,), daemon=True)
+    thread = threading.Thread(target=_refresh_kline_metrics, args=(stock_codes,), daemon=True)
     thread.start()
     return thread
 
@@ -340,13 +445,6 @@ def _is_low20_cache_stale(cache_row, now):
     return fetched_at.date() < now.date()
 
 
-def _low20_refresh_window(now):
-    phase = _market_phase(now)
-    if phase == "before_open":
-        phase = "intraday"
-    return f"{now.date()}:{phase}"
-
-
 def _write_low20_cache(db, code, low20_row, now):
     db.execute(f"""
         INSERT INTO `{_LOW20_CACHE_TABLE}`
@@ -368,64 +466,6 @@ def _write_low20_cache(db, code, low20_row, now):
                low20_row.get("lowest_low"),
                low20_row.get("bounce_position"),
                now.strftime("%Y-%m-%d %H:%M:%S"))
-
-
-def _refresh_low20_positions(stock_codes):
-    global _LOW20_REFRESH_RUNNING
-    db = None
-    try:
-        db = mysql.Connection(**mdb.MYSQL_CONN)
-        _ensure_cache_tables(db)
-        now = _now()
-        phase = _market_phase(now)
-        # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
-        effective_today = now.date() if phase in ("intraday", "before_open") else None
-        # 读取实时价格，优先用于反弹幅度计算
-        price_rows = _read_price_cache(db, stock_codes)
-        price_by_code = {row["code"]: row for row in price_rows}
-        for code in stock_codes:
-            cache_row = _read_low20_cache(db, [code]).get(code)
-            if not _is_low20_cache_stale(cache_row, now):
-                continue
-
-            price_row = price_by_code.get(code)
-            current_price = _to_float(price_row.get("current_price")) if price_row else None
-            low20_row = stocklist.fetch_20day_low_bounce(code, today=effective_today, current_price=current_price)
-            if low20_row is not None:
-                _write_low20_cache(db, code, low20_row, now)
-    except Exception as error:
-        print(f"market_quotes._refresh_low20_positions处理异常：{error}")
-    finally:
-        if db is not None:
-            db.close()
-        with _LOW20_REFRESH_LOCK:
-            _LOW20_REFRESH_RUNNING = False
-
-
-def _schedule_low20_refresh(stock_codes):
-    global _LOW20_REFRESH_RUNNING
-    stock_codes = tuple(dict.fromkeys(stock_codes))
-    if not stock_codes:
-        return
-    window = _low20_refresh_window(_now())
-    if window is None:
-        return
-    with _LOW20_REFRESH_LOCK:
-        if _LOW20_REFRESH_RUNNING:
-            return
-        stock_codes = tuple(
-            code for code in stock_codes
-            if _LOW20_REFRESH_ATTEMPTS.get(code) != window
-        )
-        if not stock_codes:
-            return
-        for code in stock_codes:
-            _LOW20_REFRESH_ATTEMPTS[code] = window
-        _LOW20_REFRESH_RUNNING = True
-
-    thread = threading.Thread(target=_refresh_low20_positions, args=(stock_codes,), daemon=True)
-    thread.start()
-    return thread
 
 
 def _read_high20_cache(db, stock_codes):
@@ -459,13 +499,6 @@ def _is_high20_cache_stale(cache_row, now):
     return fetched_at.date() < now.date()
 
 
-def _high20_refresh_window(now):
-    phase = _market_phase(now)
-    if phase == "before_open":
-        phase = "intraday"
-    return f"{now.date()}:{phase}"
-
-
 def _write_high20_cache(db, code, high20_row, now):
     db.execute(f"""
         INSERT INTO `{_HIGH20_CACHE_TABLE}`
@@ -489,59 +522,3 @@ def _write_high20_cache(db, code, high20_row, now):
                now.strftime("%Y-%m-%d %H:%M:%S"))
 
 
-def _refresh_high20_positions(stock_codes):
-    global _HIGH20_REFRESH_RUNNING
-    db = None
-    try:
-        db = mysql.Connection(**mdb.MYSQL_CONN)
-        _ensure_cache_tables(db)
-        now = _now()
-        phase = _market_phase(now)
-        # 下午3点前：日期朝前一交易日挪，排除当日未完成K线
-        effective_today = now.date() if phase in ("intraday", "before_open") else None
-        # 读取实时价格，优先用于回落幅度计算
-        price_rows = _read_price_cache(db, stock_codes)
-        price_by_code = {row["code"]: row for row in price_rows}
-        for code in stock_codes:
-            cache_row = _read_high20_cache(db, [code]).get(code)
-            if not _is_high20_cache_stale(cache_row, now):
-                continue
-
-            price_row = price_by_code.get(code)
-            current_price = _to_float(price_row.get("current_price")) if price_row else None
-            high20_row = stocklist.fetch_20day_high_decline(code, today=effective_today, current_price=current_price)
-            if high20_row is not None:
-                _write_high20_cache(db, code, high20_row, now)
-    except Exception as error:
-        print(f"market_quotes._refresh_high20_positions处理异常：{error}")
-    finally:
-        if db is not None:
-            db.close()
-        with _HIGH20_REFRESH_LOCK:
-            _HIGH20_REFRESH_RUNNING = False
-
-
-def _schedule_high20_refresh(stock_codes):
-    global _HIGH20_REFRESH_RUNNING
-    stock_codes = tuple(dict.fromkeys(stock_codes))
-    if not stock_codes:
-        return
-    window = _high20_refresh_window(_now())
-    if window is None:
-        return
-    with _HIGH20_REFRESH_LOCK:
-        if _HIGH20_REFRESH_RUNNING:
-            return
-        stock_codes = tuple(
-            code for code in stock_codes
-            if _HIGH20_REFRESH_ATTEMPTS.get(code) != window
-        )
-        if not stock_codes:
-            return
-        for code in stock_codes:
-            _HIGH20_REFRESH_ATTEMPTS[code] = window
-        _HIGH20_REFRESH_RUNNING = True
-
-    thread = threading.Thread(target=_refresh_high20_positions, args=(stock_codes,), daemon=True)
-    thread.start()
-    return thread

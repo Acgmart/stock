@@ -14,6 +14,7 @@ from instock.core.common import (
     _date_text,
     _json_default,
     _ensure_cache_tables,
+    _get_or_sync_fiscal_year_base,
 )
 from instock.core.market_quotes import (
     _get_cached_price_rows,
@@ -36,7 +37,6 @@ from instock.core.profile import (
 )
 from instock.core.dividend import (
     _get_cached_dividend_history,
-    _latest_dividend_year,
     _sum_fiscal_year_dividend,
     _consecutive_non_decline_years,
     _schedule_dividend_history_refresh,
@@ -63,6 +63,8 @@ class HighDividendDataHandler(webBase.BaseHandler):
         _ensure_cache_tables(self.db)
         self.set_header("Content-Type", "application/json;charset=UTF-8")
         now = _now()
+        # 财年基准年份（settings 表）：跨年自动重置，旧/新财年收益随其平移
+        fiscal_year_base = _get_or_sync_fiscal_year_base(self.db)
         stock_codes = [code for code in stocklist.get_stock_codes() if stocklist.is_a_stock_code(code)]
         total_stock_count = len(stock_codes)
         rows = []
@@ -96,7 +98,7 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     blocked_industry_stock_codes.add(code)
             if blocked_industry_stock_codes:
                 stock_codes = [code for code in stock_codes if code not in blocked_industry_stock_codes]
-        # 屏蔽 blocklist_negativeEps.txt 中记录的收益（上年年报稀释每股收益）为负的股票，被屏蔽的股票不再读取缓存、不再刷新
+        # 屏蔽 blocklist_negativeEps.txt 中记录的收益（最新已完结财年年报稀释每股收益）为负或0的股票，被屏蔽的股票不再读取缓存、不再刷新
         blocked_negative_eps_codes = set(blocklist.get_blocked_codes(blocklist.NEGATIVE_EPS_FILE))
         if blocked_negative_eps_codes:
             stock_codes = [code for code in stock_codes if code not in blocked_negative_eps_codes]
@@ -152,20 +154,48 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     # 盘中/周末/假日/盘后未更新：最新一根即上一交易日收盘
                     pre_close_price = latest_close
             try:
+                finance_report, finance_report_stale = _get_cached_latest_finance_report(self.db, code, fiscal_year_base)
+                if finance_report_stale:
+                    stale_finance_codes.append(code)
+            except Exception as error:
+                finance_report = {}
+                errors.append(f"{code} 财报数据读取失败：{error}")
+
+            # 最新已完结财年：检测到新财年（基准-1）年报 → 新财年，否则为旧财年（基准-2）；
+            # 年报数据未抓取（finance_fetched=False）时无法判断年份，暂不计算股息率/息增年
+            if finance_report.get("finance_fetched"):
+                latest_fiscal_year = fiscal_year_base - 1 if finance_report.get("new_year_eps_report_date") else fiscal_year_base - 2
+            else:
+                latest_fiscal_year = None
+
+            try:
                 history, dividend_changed, dividend_history_stale = _get_cached_dividend_history(self.db, code)
                 if dividend_history_stale:
                     stale_dividend_codes.append(code)
-                dividend_year = _latest_dividend_year(history)
-                dividend_per_10, details = _sum_fiscal_year_dividend(history, dividend_year)
-                dividend_growth_years = _consecutive_non_decline_years(history, dividend_year)
-                dividend_per_share = dividend_per_10 / 10
-                # 派息历史未抓取（未知）时股息率为 None，不显示为 0；
-                # 有派息记录的股票每股派息必大于0，无需担心漏掉真实0派息
-                dividend_yield = None
-                if dividend_per_share > 0 and current_price and current_price > 0:
-                    dividend_yield = dividend_per_share / current_price * 100
+                dividend_year = latest_fiscal_year
+                if dividend_year is None:
+                    # 年报数据未抓取：无法判断财年，股息率/息增年暂不计算（显示--），等抓取完成后计算
+                    dividend_per_10 = None
+                    dividend_per_share = None
+                    dividend_yield = None
+                    dividend_growth_years = None
+                    details = []
+                else:
+                    dividend_per_10, details = _sum_fiscal_year_dividend(history, dividend_year)
+                    dividend_growth_years = _consecutive_non_decline_years(history, dividend_year)
+                    dividend_per_share = dividend_per_10 / 10
+                    # 股息率未知（派息历史未抓取）时为 None 显示 --；
+                    # 派息历史已抓取但最近财年无派息时股息率真实为 0（由股息率<1%规则屏蔽）
+                    dividend_yield = None
+                    if dividend_per_share > 0 and current_price and current_price > 0:
+                        dividend_yield = dividend_per_share / current_price * 100
+                    elif dividend_per_share <= 0 and (history or not dividend_history_stale):
+                        dividend_yield = 0.0
             except Exception as error:
-                dividend_year = now.year - 1
+                # history/dividend_history_stale 供后续屏蔽判断使用，读取失败按未抓取处理
+                history = []
+                dividend_history_stale = True
+                dividend_year = latest_fiscal_year
                 dividend_per_10 = 0.0
                 dividend_per_share = 0.0
                 dividend_yield = None
@@ -174,17 +204,9 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 dividend_growth_years = 0
                 errors.append(f"{code} 派息数据读取失败：{error}")
 
-            try:
-                finance_report, finance_report_stale = _get_cached_latest_finance_report(self.db, code)
-                if finance_report_stale:
-                    stale_finance_codes.append(code)
-            except Exception as error:
-                finance_report = {}
-                errors.append(f"{code} 财报数据读取失败：{error}")
-
             # 屏蔽优先级：行业（请求开始已处理）→ 收益 → 股息率 → 息增年
-            # 收益（上年年报稀释每股收益）为负：自动记录到 blocklist_negativeEps.txt 并屏蔽，不再读取缓存、不再刷新
-            if finance_report.get("diluted_eps") is not None and finance_report.get("diluted_eps") < 0:
+            # 收益（最新已完结财年年报稀释每股收益）为负或0：自动记录到 blocklist_negativeEps.txt 并屏蔽，不再读取缓存、不再刷新
+            if finance_report.get("diluted_eps") is not None and finance_report.get("diluted_eps") <= 0:
                 blocklist.add_blocked(blocklist.NEGATIVE_EPS_FILE, code, stock_names.get(code, ""))
                 blocked_this_run_codes.add(code)
                 continue
@@ -247,6 +269,14 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "diluted_eps_field": finance_report.get("diluted_eps_field", ""),
                 "diluted_eps_report_date": finance_report.get("diluted_eps_report_date", ""),
                 "diluted_eps_report_name": finance_report.get("diluted_eps_report_name", ""),
+                "old_year_eps": finance_report.get("old_year_eps"),
+                "old_year_eps_field": finance_report.get("old_year_eps_field", ""),
+                "old_year_eps_report_date": finance_report.get("old_year_eps_report_date", ""),
+                "old_year_eps_report_name": finance_report.get("old_year_eps_report_name", ""),
+                "new_year_eps": finance_report.get("new_year_eps"),
+                "new_year_eps_field": finance_report.get("new_year_eps_field", ""),
+                "new_year_eps_report_date": finance_report.get("new_year_eps_report_date", ""),
+                "new_year_eps_report_name": finance_report.get("new_year_eps_report_name", ""),
                 "finance_report_changed": finance_report.get("report_changed", False),
                 "industry_name": "" if profile_by_code.get(code) is None else (profile_by_code[code].get("industry_name") or ""),
                 "narrow_fcf": narrow_fcf,
@@ -299,8 +329,8 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "change_rate": change_rate,
                 "market_cap": None if profile_by_code.get(code) is None else _to_float(profile_by_code[code].get("market_cap")),
                 "dividend_year": dividend_year,
-                "dividend_per_10": round(dividend_per_10, 4),
-                "dividend_per_share": round(dividend_per_share, 4),
+                "dividend_per_10": None if dividend_per_10 is None else round(dividend_per_10, 4),
+                "dividend_per_share": None if dividend_per_share is None else round(dividend_per_share, 4),
                 "dividend_yield": dividend_yield,
                 "dividend_growth_years": dividend_growth_years,
                 "dividend_changed": dividend_changed,
@@ -345,6 +375,8 @@ class HighDividendDataHandler(webBase.BaseHandler):
             "total_stock_count": total_stock_count,
             "stock_count": len(rows),
             "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "fiscal_year_base": fiscal_year_base,
+            "fiscal_year_note": "财年基准年份存于数据库 settings 表，跨年自动重置；旧财年=基准-2，新财年=基准-1，检测到新财年年报后新财年收益不再为空",
             "cache_policy": {
                 "price": "盘中每5分钟刷新一次（与前端自动刷新同步），盘后保持收盘价",
                 "profile": "页面请求只读缓存；行业只抓一次不刷新，市值取每周最后一个交易日收盘数据、周五收盘后刷新，无缓存立即抓取",

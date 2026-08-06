@@ -247,33 +247,14 @@ def _sum_fiscal_year_dividend(history, year):
     return total_per_10, details
 
 
-def _latest_dividend_year(history):
-    """返回有派息的最近一个已完结财年。
-
-    只认 -12-31 年报记录会把「只有年中派息、没有年报派息」的年度漏掉
-    （如某年公司不分红或只做中期分红），从而错误回退到更早的年度；
-    但当年（进行中）的中期派息也不算最新年度，否则会把未完的当年误当完整年度。
-    """
-    years = []
-    for item in history:
-        report_date = _date_text(item.get("REPORT_DATE"))
-        if len(report_date) < 4:
-            continue
-        cash_per_10 = _to_float(item.get("PRETAX_BONUS_RMB"))
-        if cash_per_10 is None or cash_per_10 <= 0:
-            continue
-        years.append(int(report_date[:4]))
-
-    current_year = _now().year
-    completed_years = [year for year in years if year < current_year]
-    if completed_years:
-        return max(completed_years)
-    if years:
-        return max(years)
-    return current_year - 1
-
-
 def _consecutive_non_decline_years(history, year):
+    """返回息增年：从最近已完结财年起，派息不低于上一年的连续年数。
+
+    持平（相等）算作继续，只有下降才中断；
+    无派息的断档财年按 0 参与比较，恢复派息（0→正）算作增加；
+    连续无派息年份不计数（0→0 中断），避免多年断档虚增年数；
+    不超过已记录年份范围。
+    """
     dividends_by_year = {}
     for item in history:
         report_date = _date_text(item.get("REPORT_DATE"))
@@ -285,10 +266,17 @@ def _consecutive_non_decline_years(history, year):
         fiscal_year = int(report_date[:4])
         dividends_by_year[fiscal_year] = dividends_by_year.get(fiscal_year, 0.0) + cash_per_10
 
+    if not dividends_by_year:
+        return 0
+    first_year = min(dividends_by_year)
     years = 0
     current_year = int(year)
-    while current_year in dividends_by_year and current_year - 1 in dividends_by_year:
-        if dividends_by_year[current_year] < dividends_by_year[current_year - 1]:
+    while current_year - 1 >= first_year:
+        current = dividends_by_year.get(current_year, 0.0)
+        previous = dividends_by_year.get(current_year - 1, 0.0)
+        if current < previous:
+            break
+        if current == 0 and previous == 0:
             break
         years += 1
         current_year -= 1

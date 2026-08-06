@@ -30,6 +30,8 @@ _LOW20_CACHE_TABLE = "cn_high_dividend_low20_cache"
 _HIGH20_CACHE_TABLE = "cn_high_dividend_high20_cache"
 _KLINE_CACHE_TABLE = "cn_high_dividend_kline_cache"
 _PROFILE_CACHE_TABLE = "cn_high_dividend_profile_cache"
+_SETTINGS_TABLE = "cn_high_dividend_settings"
+_FISCAL_YEAR_BASE_KEY = "fiscal_year_base"
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _DIVIDEND_REFRESH_HOUR = 8
 _DIVIDEND_AFTER_CLOSE_REFRESH_START_HOUR = 16
@@ -76,6 +78,35 @@ def _throttle_external_request():
         if elapsed < target:
             time.sleep(target - elapsed)
         _LAST_EXTERNAL_REQUEST_AT = time.time()
+
+
+def _get_or_sync_fiscal_year_base(db):
+    """读取财年基准年份（settings 表），不存在时写入当前年份。
+
+    跨年（now.year 大于存储值，如2026→2027）时自动重置为当前年份，
+    旧财年收益/新财年收益随基准年份平移（旧=基准-2，新=基准-1）。
+    """
+    now = _now()
+    row = db.get(
+        f"SELECT `setting_value` FROM `{_SETTINGS_TABLE}` WHERE `setting_key` = %s",
+        _FISCAL_YEAR_BASE_KEY,
+    )
+    base = now.year
+    if row is not None:
+        try:
+            base = int(row.get("setting_value"))
+        except Exception:
+            base = now.year
+    if row is None or now.year > base:
+        db.execute(f"""
+            INSERT INTO `{_SETTINGS_TABLE}` (`setting_key`, `setting_value`, `updated_at`)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                `setting_value` = VALUES(`setting_value`),
+                `updated_at` = VALUES(`updated_at`)
+        """, _FISCAL_YEAR_BASE_KEY, str(now.year), now.strftime("%Y-%m-%d %H:%M:%S"))
+        base = now.year
+    return base
 
 
 def _ensure_cache_tables(db):
@@ -210,6 +241,14 @@ def _ensure_cache_tables(db):
                 `high_price` decimal(12,4) DEFAULT NULL,
                 `low_price` decimal(12,4) DEFAULT NULL,
                 PRIMARY KEY (`code`, `trade_date`)
+            ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+        """)
+        db.execute(f"""
+            CREATE TABLE IF NOT EXISTS `{_SETTINGS_TABLE}` (
+                `setting_key` varchar(50) NOT NULL,
+                `setting_value` varchar(100) DEFAULT NULL,
+                `updated_at` datetime DEFAULT NULL,
+                PRIMARY KEY (`setting_key`)
             ) CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
         """)
         _CACHE_TABLE_READY = True

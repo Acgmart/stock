@@ -203,8 +203,8 @@ def _latest_finance_report(history):
     return sorted(history, key=lambda item: _date_text(item.get("REPORT_DATE")), reverse=True)[0]
 
 
-def _latest_annual_diluted_eps(history):
-    row = _latest_annual_report(history)
+def _annual_eps_fields(row, prefix="", base="diluted_eps"):
+    """提取年报记录的稀释每股收益字段；prefix+base 区分最新/旧财年/新财年。"""
     if row is None:
         return {}
     eps = None
@@ -215,14 +215,30 @@ def _latest_annual_diluted_eps(history):
             eps_field = field
             break
     return {
-        "diluted_eps": eps,
-        "diluted_eps_field": eps_field,
-        "diluted_eps_report_date": _date_text(row.get("REPORT_DATE")),
-        "diluted_eps_report_name": row.get("REPORT_DATE_NAME") or row.get("REPORT_TYPE") or "",
+        f"{prefix}{base}": eps,
+        f"{prefix}{base}_field": eps_field,
+        f"{prefix}{base}_report_date": _date_text(row.get("REPORT_DATE")),
+        f"{prefix}{base}_report_name": row.get("REPORT_DATE_NAME") or row.get("REPORT_TYPE") or "",
     }
 
 
-def _get_cached_latest_finance_report(db, code):
+def _latest_annual_diluted_eps(history):
+    return _annual_eps_fields(_latest_annual_report(history))
+
+
+def _annual_report_for_year(history, year):
+    """返回指定财年的年报记录；该财年年报未检测到时返回 None。"""
+    annual_rows = [
+        item for item in history or []
+        if _is_annual_report_row(item)
+        and _date_text(item.get("REPORT_DATE")).startswith(str(year))
+    ]
+    if not annual_rows:
+        return None
+    return sorted(annual_rows, key=lambda item: _date_text(item.get("REPORT_DATE")), reverse=True)[0]
+
+
+def _get_cached_latest_finance_report(db, code, fiscal_year_base=None):
     now = _now()
     cache_row, history = _read_finance_report_cache(db, code)
     is_stale = _is_finance_report_cache_stale(cache_row, history, now)
@@ -230,10 +246,16 @@ def _get_cached_latest_finance_report(db, code):
     changed_report_date = None if cache_row is None else cache_row.get("changed_report_date")
     report_changed = _is_in_changed_display_window(changed_at, changed_report_date, now)
     annual_eps = _latest_annual_diluted_eps(history)
+    # 旧财年（基准-2）年报必然已披露；新财年（基准-1）年报检测到才非空，
+    # 两者配合即可判断当前已完结的最新财年是哪一年；基准年份存于 settings 表。
+    # finance_fetched：是否已抓取到年报数据（有缓存行），未抓取时无法判断财年
+    base = fiscal_year_base if fiscal_year_base is not None else now.year
+    old_year_eps = _annual_eps_fields(_annual_report_for_year(history, base - 2), prefix="old_year_", base="eps")
+    new_year_eps = _annual_eps_fields(_annual_report_for_year(history, base - 1), prefix="new_year_", base="eps")
     row = _latest_finance_report(history)
     if row is None:
         annual_eps["report_changed"] = False
-        return annual_eps, is_stale
+        return {**annual_eps, **old_year_eps, **new_year_eps, "finance_fetched": cache_row is not None}, is_stale
     return {
         "deducted_profit_growth": _to_float(row.get("KCFJCXSYJLRTZ")),
         "report_date": _date_text(row.get("REPORT_DATE")),
@@ -242,6 +264,9 @@ def _get_cached_latest_finance_report(db, code):
         "deducted_profit": _to_float(row.get("KCFJCXSYJLR")),
         "report_changed": report_changed,
         **annual_eps,
+        **old_year_eps,
+        **new_year_eps,
+        "finance_fetched": cache_row is not None,
     }, is_stale
 
 

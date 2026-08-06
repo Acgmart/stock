@@ -109,9 +109,9 @@ def _sync_indicator_cache_for_prices(db, stock_codes, now):
         new_ma120_pos = (current_price / ma120 - 1) * 100
         db.execute(f"""
             UPDATE `{_MA120_CACHE_TABLE}`
-            SET `close_price` = %s, `ma120_position` = %s, `fetched_at` = %s
+            SET `close_price` = %s, `ma120_position` = %s
             WHERE `code` = %s
-        """, current_price, new_ma120_pos, now.strftime("%Y-%m-%d %H:%M:%S"), code)
+        """, current_price, new_ma120_pos, code)
 
     # 反弹
     low20_rows = _read_low20_cache(db, stock_codes)
@@ -125,9 +125,9 @@ def _sync_indicator_cache_for_prices(db, stock_codes, now):
         new_bounce = (current_price / lowest_low - 1) * 100
         db.execute(f"""
             UPDATE `{_LOW20_CACHE_TABLE}`
-            SET `close_price` = %s, `bounce_position` = %s, `fetched_at` = %s
+            SET `close_price` = %s, `bounce_position` = %s
             WHERE `code` = %s
-        """, current_price, new_bounce, now.strftime("%Y-%m-%d %H:%M:%S"), code)
+        """, current_price, new_bounce, code)
 
     # 回落
     high20_rows = _read_high20_cache(db, stock_codes)
@@ -141,9 +141,9 @@ def _sync_indicator_cache_for_prices(db, stock_codes, now):
         new_decline = (current_price / highest_high - 1) * 100
         db.execute(f"""
             UPDATE `{_HIGH20_CACHE_TABLE}`
-            SET `close_price` = %s, `decline_position` = %s, `fetched_at` = %s
+            SET `close_price` = %s, `decline_position` = %s
             WHERE `code` = %s
-        """, current_price, new_decline, now.strftime("%Y-%m-%d %H:%M:%S"), code)
+        """, current_price, new_decline, code)
 
 
 def _get_cached_price_rows(db, stock_codes, errors):
@@ -357,31 +357,35 @@ def _refresh_kline_metrics(stock_codes):
         price_rows = _read_price_cache(db, stock_codes)
         price_by_code = {row["code"]: row for row in price_rows}
         for code in stock_codes:
-            ma120_row = _read_ma120_cache(db, [code]).get(code)
-            low20_row = _read_low20_cache(db, [code]).get(code)
-            high20_row = _read_high20_cache(db, [code]).get(code)
-            if not (_is_ma120_cache_stale(ma120_row, now)
-                    or _is_low20_cache_stale(low20_row, now)
-                    or _is_high20_cache_stale(high20_row, now)):
-                continue
-
-            price_row = price_by_code.get(code)
-            current_price = _to_float(price_row.get("current_price")) if price_row else None
-
-            rows = _read_kline_cache(db, code)
-            if not rows or rows[-1][0] < expected_date or _has_pending_ex_dividend(db, code, rows[-1][0]):
-                rows = stocklist.fetch_daily_kline_rows(code, today=effective_today)
-                if rows is None or not rows:
+            try:
+                ma120_row = _read_ma120_cache(db, [code]).get(code)
+                low20_row = _read_low20_cache(db, [code]).get(code)
+                high20_row = _read_high20_cache(db, [code]).get(code)
+                if not (_is_ma120_cache_stale(ma120_row, now)
+                        or _is_low20_cache_stale(low20_row, now)
+                        or _is_high20_cache_stale(high20_row, now)):
                     continue
-                _write_kline_cache(db, code, rows)
 
-            metrics = stocklist.compute_kline_metrics(rows, current_price)
-            if metrics.get("ma120") is not None and _is_ma120_cache_stale(ma120_row, now):
-                _write_ma120_cache(db, code, metrics["ma120"], now)
-            if metrics.get("low20") is not None and _is_low20_cache_stale(low20_row, now):
-                _write_low20_cache(db, code, metrics["low20"], now)
-            if metrics.get("high20") is not None and _is_high20_cache_stale(high20_row, now):
-                _write_high20_cache(db, code, metrics["high20"], now)
+                price_row = price_by_code.get(code)
+                current_price = _to_float(price_row.get("current_price")) if price_row else None
+
+                rows = _read_kline_cache(db, code)
+                if not rows or rows[-1][0] < expected_date or _has_pending_ex_dividend(db, code, rows[-1][0]):
+                    rows = stocklist.fetch_daily_kline_rows(code, today=effective_today)
+                    if rows is None or not rows:
+                        continue
+                    _write_kline_cache(db, code, rows)
+
+                metrics = stocklist.compute_kline_metrics(rows, current_price)
+                if metrics.get("ma120") is not None and _is_ma120_cache_stale(ma120_row, now):
+                    _write_ma120_cache(db, code, metrics["ma120"], now)
+                if metrics.get("low20") is not None and _is_low20_cache_stale(low20_row, now):
+                    _write_low20_cache(db, code, metrics["low20"], now)
+                if metrics.get("high20") is not None and _is_high20_cache_stale(high20_row, now):
+                    _write_high20_cache(db, code, metrics["high20"], now)
+            except Exception as error:
+                # 单只股票请求失败只跳过该股，不影响其余股票
+                print(f"market_quotes K线刷新跳过 {code}：{error}")
     except Exception as error:
         print(f"market_quotes._refresh_kline_metrics处理异常：{error}")
     finally:

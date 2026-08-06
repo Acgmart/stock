@@ -262,6 +262,9 @@ class HighDividendDataHandler(webBase.BaseHandler):
                 "fcf_dividend": fcf_dividend,
                 "fcf_price": fcf_price,
                 "ma120_trade_date": "" if not ma120_row else _date_text(ma120_row.get("trade_date")),
+                "ma120_time": "" if not ma120_row else (
+                    ma120_row["fetched_at"].strftime("%H:%M:%S")
+                    if hasattr(ma120_row.get("fetched_at"), "strftime") else str(ma120_row.get("fetched_at") or "")[11:19]),
                 "ma120_close_price": None if not ma120_row else _to_float(ma120_row.get("close_price")),
                 "ma120": None if not ma120_row else _to_float(ma120_row.get("ma120")),
                 "ma120_position": ma120_position,
@@ -271,16 +274,25 @@ class HighDividendDataHandler(webBase.BaseHandler):
                     ma120_position,
                     None if not ma120_row else _to_float(ma120_row.get("ma120"))),
                 "low20_trade_date": "" if not low20_row else _date_text(low20_row.get("trade_date")),
+                "low20_time": "" if not low20_row else (
+                    low20_row["fetched_at"].strftime("%H:%M:%S")
+                    if hasattr(low20_row.get("fetched_at"), "strftime") else str(low20_row.get("fetched_at") or "")[11:19]),
                 "low20_close_price": None if not low20_row else _to_float(low20_row.get("close_price")),
                 "low20_lowest_date": "" if not low20_row else _date_text(low20_row.get("lowest_date")),
                 "low20_lowest_low": None if not low20_row else _to_float(low20_row.get("lowest_low")),
                 "low20_bounce": low20_bounce,
                 "high20_trade_date": "" if not high20_row else _date_text(high20_row.get("trade_date")),
+                "high20_time": "" if not high20_row else (
+                    high20_row["fetched_at"].strftime("%H:%M:%S")
+                    if hasattr(high20_row.get("fetched_at"), "strftime") else str(high20_row.get("fetched_at") or "")[11:19]),
                 "high20_close_price": None if not high20_row else _to_float(high20_row.get("close_price")),
                 "high20_highest_date": "" if not high20_row else _date_text(high20_row.get("highest_date")),
                 "high20_highest_high": None if not high20_row else _to_float(high20_row.get("highest_high")),
                 "high20_decline": high20_decline,
                 "price_date": "" if price_row is None else _date_text(price_row.get("price_date")),
+                "price_time": "" if price_row is None else (
+                    price_row["fetched_at"].strftime("%m-%d %H:%M:%S")
+                    if hasattr(price_row.get("fetched_at"), "strftime") else str(price_row.get("fetched_at") or "")[5:19]),
                 "current_price": current_price,
                 "change_rate": change_rate,
                 "market_cap": None if profile_by_code.get(code) is None else _to_float(profile_by_code[code].get("market_cap")),
